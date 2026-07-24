@@ -8,6 +8,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
+set "NODE_USE_ENV_PROXY=1"
 call npm start
 if errorlevel 1 (
   echo.
