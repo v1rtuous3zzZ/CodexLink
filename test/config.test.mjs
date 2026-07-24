@@ -22,12 +22,15 @@ test("config requires and persists both Telegram identity values", async () => {
     assert.equal(config.allowedUserId, "123");
     assert.equal(config.allowedChatId, "456");
     assert.equal(config.lastUpdateId, 100);
+    assert.equal(config.accountLabel, "未配置");
 
-    await saveRuntimeConfig(config, { lastUpdateId: 101 });
+    await saveRuntimeConfig(config, { lastUpdateId: 101, boundThreadId: null });
     const persisted = JSON.parse(await readFile(configPath, "utf8"));
     assert.equal(persisted.allowedUserId, "123");
     assert.equal(persisted.allowedChatId, "456");
     assert.equal(persisted.lastUpdateId, 101);
+    assert.equal(persisted.accountLabel, "未配置");
+    assert.equal(persisted.boundThreadId, null);
     assert.equal("inputMode" in persisted, false);
     assert.equal("fileAccessEnabled" in persisted, false);
   } finally {

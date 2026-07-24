@@ -13,6 +13,10 @@ export class BridgeState {
     this.lastCandidate = this.boundThread;
   }
 
+  unbind() {
+    this.boundThread = null;
+  }
+
   noteCandidate(thread) {
     this.lastCandidate = normalizeThread(thread);
   }

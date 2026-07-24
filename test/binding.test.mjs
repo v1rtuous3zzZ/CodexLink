@@ -26,3 +26,11 @@ test("pause blocks input execution but not status inspection", () => {
   state.resume();
   assert.equal(state.canExecuteInput(), true);
 });
+
+test("unbind clears the current thread", () => {
+  const state = new BridgeState();
+  state.bind({ id: "thread-a", title: "First", rolloutPath: "a.jsonl" });
+  state.unbind();
+  assert.equal(state.boundThread, null);
+  assert.equal(state.canExecuteInput(), false);
+});

@@ -13,6 +13,7 @@ This repository is a reduced and stabilized personal edition based on [Tarikv1/c
 - Send Telegram text to the currently bound Codex Desktop task.
 - Forward human-facing Codex status updates and assistant replies to Telegram.
 - List, search, bind, and open Codex Desktop tasks.
+- Unbind the current task and stop watching its rollout.
 - Pause and resume Telegram input.
 - Single-process lock to prevent duplicate Telegram polling.
 - Metadata-only operational audit logs; full Telegram and Codex message bodies are not logged.
@@ -28,17 +29,19 @@ This repository is a reduced and stabilized personal edition based on [Tarikv1/c
 /bind <number, title, or task id prefix>
 /open <number, title, or task id prefix>
 /current
+/unbind
 /status
 /pause
 /resume
 ```
 
-`/status` displays only:
+`/status` displays exactly five lines:
 
 - CodexLink running state.
 - Codex Desktop connection state.
+- Configured account label.
 - Current bound task.
-- Current task state.
+- Current task state detected from the Codex Desktop Stop/停止/Cancel/取消 button.
 
 It does not expose local paths, the Codex state database path, rollout paths, or internal debug details.
 
@@ -48,7 +51,7 @@ It does not expose local paths, the Codex state database path, rollout paths, or
 - `/files`, `/file`, and `/latest`.
 - `codex exec resume` and the `codex-exec` input mode.
 - Input-mode switching.
-- Commands unrelated to the retained personal workflow: `/updates`, `/rebind`, `/unbind`, `/last`, and `/stop`.
+- Commands unrelated to the retained personal workflow: `/updates`, `/rebind`, `/last`, and `/stop`.
 - File-access configuration and Telegram `sendDocument` support.
 - Non-Windows/headless execution paths.
 
@@ -88,6 +91,7 @@ Create `%USERPROFILE%\.codex\codexlink.local.json`:
   "pollIntervalMs": 1500,
   "paused": false,
   "dryRun": false,
+  "accountLabel": "Plus A",
   "boundThreadId": null,
   "codexWindowProcessName": "Codex"
 }
@@ -120,6 +124,8 @@ Only one CodexLink process may use the configured lock at a time.
 5. Send `/bind 1` or `/open 1`.
 6. Send a normal text message.
 
+Use `/unbind` to clear the binding and stop watching that task. Use `/bind` again to switch tasks; `/rebind` is not supported.
+
 CodexLink opens the bound task, focuses the visible Codex Desktop composer, pastes the text, submits it, and verifies that the task rollout changed. If the task is already running, CodexLink refuses to paste until the current turn finishes.
 
 ## Logs And Privacy
@@ -146,6 +152,7 @@ CodexLink opens the bound task, focuses the visible Codex Desktop composer, past
 - `No Codex thread is bound`: use `/threads`, then `/bind <number>` or `/open <number>`.
 - `Codex desktop window was not found`: start Codex Desktop and ensure it has a visible main window.
 - `Codex desktop is still running`: wait for the current Codex turn to finish and retry.
+- `Windows is locked` or the Codex window is not interactive: unlock Windows and bring Codex Desktop back to an interactive state.
 - Duplicate-instance or Telegram polling conflict: stop the other CodexLink process before starting a new one.
 
 ## License

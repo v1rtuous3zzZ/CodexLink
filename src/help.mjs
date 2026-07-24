@@ -12,6 +12,7 @@ export const HELP_TEXT = `CodexLink commands:
 /bind 11111111 - bind by id prefix
 /open Example desktop chat - open chat in Codex desktop and bind it
 /open 1 - open by list number and bind it
+/unbind - clear the current binding
 /pause - pause Telegram input
 /resume - resume Telegram input
 

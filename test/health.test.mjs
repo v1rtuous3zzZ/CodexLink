@@ -13,17 +13,29 @@ test("ping response reports CodexLink health and binding", () => {
   assert.match(text, /active/);
 });
 
-test("status contains only the four public status fields", () => {
+test("status contains the fixed five public status fields", () => {
   const text = formatStatusResponse({
+    accountLabel: "Plus A",
     paused: false,
     desktopConnected: true,
-    boundThread: { title: "Example", id: "thread-a" }
+    boundThread: { title: "同步脚本优化", id: "thread-a" },
+    detectedTaskState: "running"
   });
-  assert.deepEqual(text.split("\n").map((line) => line.split(":")[0]), [
-    "CodexLink",
-    "Codex Desktop",
-    "Bound thread",
-    "Current task"
-  ]);
+  assert.equal(text, [
+    "CodexLink：运行中",
+    "Codex Desktop：已连接",
+    "当前账号：Plus A",
+    "当前对话：同步脚本优化",
+    "任务状态：执行中"
+  ].join("\n"));
   assert.doesNotMatch(text, /path|database|rollout|error|debug/i);
+});
+
+test("status reports running, idle, paused, unbound, and unknown states", () => {
+  const base = { accountLabel: "未配置", desktopConnected: true, boundThread: { title: "任务" } };
+  assert.match(formatStatusResponse({ ...base, detectedTaskState: "running" }), /任务状态：执行中/);
+  assert.match(formatStatusResponse({ ...base, detectedTaskState: "idle" }), /任务状态：空闲/);
+  assert.match(formatStatusResponse({ ...base, paused: true, detectedTaskState: "running" }), /任务状态：已暂停/);
+  assert.match(formatStatusResponse({ ...base, boundThread: null, detectedTaskState: "running" }), /任务状态：未绑定/);
+  assert.match(formatStatusResponse({ ...base, detectedTaskState: "unknown" }), /任务状态：未知/);
 });

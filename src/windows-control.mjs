@@ -18,6 +18,47 @@ export async function getCodexDesktopConnectionStatus({ processName = "Codex", d
   }
 }
 
+export async function getCodexDesktopTaskStatus({ processName = "Codex", dryRun = false } = {}) {
+  if (dryRun) return { state: "idle" };
+  if (process.platform !== "win32") return { state: "unknown" };
+  try {
+    const { stdout } = await runFile("powershell.exe", buildWindowsTaskStatusPowerShellArgs({ processName }), {
+      maxBuffer: 256 * 1024,
+      timeout: 5000
+    });
+    const state = String(stdout).trim();
+    return { state: state === "running" || state === "idle" ? state : "unknown" };
+  } catch {
+    return { state: "unknown" };
+  }
+}
+
+export function buildWindowsTaskStatusPowerShellArgs({ processName }) {
+  const script = String.raw`
+$ProcessName = '${quotePowerShellString(processName)}'
+$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$process = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue |
+  Where-Object { $_.MainWindowHandle -ne 0 } | Sort-Object StartTime -Descending | Select-Object -First 1
+if (-not $process) { throw "Codex desktop window is unavailable." }
+$root = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
+if (-not $root) { throw "Windows is locked or Codex desktop is not interactive." }
+$rootRect = $root.Current.BoundingRectangle
+$bottomBandTop = $rootRect.Bottom - [Math]::Max(240, $rootRect.Height * 0.35)
+$names = @("Stop", "停止", "Cancel", "取消")
+$buttons = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+$running = @($buttons | Where-Object {
+  $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button -and
+  $_.Current.IsEnabled -and -not $_.Current.IsOffscreen -and
+  -not [double]::IsInfinity($_.Current.BoundingRectangle.Y) -and
+  $_.Current.BoundingRectangle.Y -ge $bottomBandTop -and $names -contains $_.Current.Name
+} | Select-Object -First 1)
+if ($running) { 'running' } else { 'idle' }
+`;
+  return ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script];
+}
+
 export async function sendInputToCodexWindow(text, { processName = "Codex", dryRun = false } = {}) {
   if (dryRun) return { ok: true, dryRun: true, clipboardRestoreFailed: false };
   if (process.platform !== "win32") {
@@ -70,9 +111,27 @@ public static class Win32 {
   [DllImport("user32.dll")]
   public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")]
+  public static extern IntPtr OpenInputDesktop(uint dwFlags, bool fInherit, uint dwDesiredAccess);
+  [DllImport("user32.dll")]
+  public static extern bool SwitchDesktop(IntPtr hDesktop);
+  [DllImport("user32.dll")]
+  public static extern bool CloseDesktop(IntPtr hDesktop);
+  [DllImport("user32.dll")]
   public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
 }
 "@
+
+$inputDesktop = [Win32]::OpenInputDesktop(0, $false, 0x0100)
+if ($inputDesktop -eq [IntPtr]::Zero) {
+  throw "Windows is locked or the desktop is not interactive."
+}
+try {
+  if (-not [Win32]::SwitchDesktop($inputDesktop)) {
+    throw "Windows is locked or the desktop is not interactive."
+  }
+} finally {
+  $null = [Win32]::CloseDesktop($inputDesktop)
+}
 
 $process = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue |
   Where-Object { $_.MainWindowHandle -ne 0 } |
@@ -108,13 +167,16 @@ $composerOffsetY = [int]([Math]::Max(95, [Math]::Min(150, $height * 0.12)))
 $composerY = $rect.Bottom - $composerOffsetY
 
 $rootElement = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
+if (-not $rootElement) {
+  throw "Windows is locked or the Codex desktop window is not interactive."
+}
 $allControls = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
 $bottomBandTop = $rect.Bottom - [Math]::Max(240, $height * 0.35)
 $stopButton = @($allControls | Where-Object {
   $control = $_.Current
   $buttonRect = $control.BoundingRectangle
   $control.ControlType -eq [System.Windows.Automation.ControlType]::Button -and
-    $_.Current.Name -eq "Stop" -and
+    @("Stop", "停止", "Cancel", "取消") -contains $_.Current.Name -and
     $control.IsEnabled -and
     -not [double]::IsInfinity($buttonRect.Y) -and
     $buttonRect.Y -ge $bottomBandTop
@@ -123,20 +185,25 @@ if ($stopButton) {
   throw "Codex desktop is still running (Stop button is visible). Wait until the current turn finishes, then send the Telegram message again."
 }
 
-$placeholder = @($allControls | Where-Object {
+$editable = @($allControls | Where-Object {
   $control = $_.Current
-  $placeholderRect = $control.BoundingRectangle
-  $control.ControlType -eq [System.Windows.Automation.ControlType]::Text -and
-    ($control.Name -eq "Ask for follow-up changes" -or $control.Name -match "^Ask ") -and
-    -not [double]::IsInfinity($placeholderRect.X) -and
-    -not [double]::IsInfinity($placeholderRect.Y) -and
-    $placeholderRect.Y -ge $bottomBandTop
+  $editableRect = $control.BoundingRectangle
+  ($control.ControlType -eq [System.Windows.Automation.ControlType]::Edit -or
+    $control.ControlType -eq [System.Windows.Automation.ControlType]::Document) -and
+    $control.IsEnabled -and $control.IsKeyboardFocusable -and -not $control.IsOffscreen -and
+    -not [double]::IsInfinity($editableRect.X) -and -not [double]::IsInfinity($editableRect.Y) -and
+    $editableRect.Width -gt 0 -and $editableRect.Height -gt 0 -and $editableRect.Y -ge $bottomBandTop
 } | Sort-Object { $_.Current.BoundingRectangle.Y } -Descending | Select-Object -First 1)
-if ($placeholder) {
-  $placeholderRect = $placeholder.Current.BoundingRectangle
-  $placeholderY = [int]($placeholderRect.Y + ($placeholderRect.Height / 2))
-  $composerY = $placeholderY
-  $composerX = [int]([Math]::Max($rect.Left + 60, $placeholderRect.X + 20))
+if (-not $editable) {
+  throw "Refusing to paste because the Codex input area could not be confirmed."
+}
+$editableRect = $editable.Current.BoundingRectangle
+$editableY = [int]($editableRect.Y + ($editableRect.Height / 2))
+$editableX = [int]($editableRect.X + ([Math]::Min(80, $editableRect.Width / 2)))
+if ($editableX -ge $rect.Left -and $editableX -le $rect.Right -and
+    $editableY -ge $bottomBandTop -and $editableY -le $rect.Bottom) {
+  $composerX = $editableX
+  $composerY = $editableY
 }
 $null = [Win32]::SetCursorPos($composerX, $composerY)
 Start-Sleep -Milliseconds 80

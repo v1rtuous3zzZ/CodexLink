@@ -4,7 +4,7 @@ import { stat } from "node:fs/promises";
 import { AuditLog } from "./audit.mjs";
 import { isAuthorizedTelegramMessage } from "./authorization.mjs";
 import { BridgeState } from "./bridge-state.mjs";
-import { createIncomingTextDeduper } from "./chat-routing.mjs";
+import { createIncomingTextDeduper, GUARDED_COMMANDS, runCommandSafely, unbindCurrent } from "./chat-routing.mjs";
 import { loadConfig, saveRuntimeConfig } from "./config.mjs";
 import {
   discoverCompatibleStateDatabase,
@@ -18,7 +18,7 @@ import { openCodexThread } from "./codex-deeplink.mjs";
 import { createDeduper } from "./rollout-parser.mjs";
 import { RolloutTail } from "./rollout-tail.mjs";
 import { TelegramClient } from "./telegram.mjs";
-import { getCodexDesktopConnectionStatus, sendInputToCodexWindow } from "./windows-control.mjs";
+import { getCodexDesktopConnectionStatus, getCodexDesktopTaskStatus, sendInputToCodexWindow } from "./windows-control.mjs";
 import { HELP_TEXT } from "./help.mjs";
 import { formatPingResponse, formatStatusResponse } from "./health.mjs";
 import { shouldForwardEvent } from "./output-routing.mjs";
@@ -132,6 +132,17 @@ async function main() {
   }
 
   async function handleCommand(chatId, text) {
+    const command = text.trim().split(/\s+/)[0];
+    if (!GUARDED_COMMANDS.has(command)) return handleCommandUnsafe(chatId, text);
+    return runCommandSafely({
+      command,
+      operation: () => handleCommandUnsafe(chatId, text),
+      sendFailure: (message) => telegram.sendMessage(chatId, message),
+      auditFailure: (detail) => audit.write("command_failed", detail)
+    });
+  }
+
+  async function handleCommandUnsafe(chatId, text) {
     const [command, ...rest] = text.trim().split(/\s+/);
     const arg = rest.join(" ").trim();
     if (command === "/help") return telegram.sendMessage(chatId, HELP_TEXT);
@@ -156,6 +167,15 @@ async function main() {
       await audit.write("open_thread", { threadId: thread.id, dryRun: config.dryRun });
       return bindThread(chatId, thread, { opened: true });
     }
+    if (command === "/unbind") {
+      await unbindCurrent({
+        persist: async () => { config = await saveRuntimeConfig(config, { boundThreadId: null }); },
+        state,
+        stopTail: () => { tail = null; }
+      });
+      await audit.write("unbind");
+      return telegram.sendMessage(chatId, "已解除当前对话绑定。");
+    }
     if (command === "/pause") {
       state.pause();
       config = await saveRuntimeConfig(config, { paused: true });
@@ -169,14 +189,16 @@ async function main() {
       return telegram.sendMessage(chatId, "Bridge resumed.");
     }
     if (command === "/status") {
-      const desktop = await getCodexDesktopConnectionStatus({
-        processName: config.codexWindowProcessName,
-        dryRun: config.dryRun
-      });
+      const desktop = await getCodexDesktopConnectionStatus({ processName: config.codexWindowProcessName, dryRun: config.dryRun });
+      const task = desktop.connected
+        ? await getCodexDesktopTaskStatus({ processName: config.codexWindowProcessName, dryRun: config.dryRun })
+        : { state: "unknown" };
       return telegram.sendMessage(chatId, formatStatusResponse({
+        accountLabel: config.accountLabel,
         paused: state.paused,
         desktopConnected: desktop.connected,
-        boundThread: state.boundThread
+        boundThread: state.boundThread,
+        detectedTaskState: task.state
       }));
     }
     return telegram.sendMessage(chatId, `Unknown command: ${command}`);
