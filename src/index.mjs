@@ -4,7 +4,7 @@ import { stat } from "node:fs/promises";
 import { AuditLog } from "./audit.mjs";
 import { isAuthorizedTelegramMessage } from "./authorization.mjs";
 import { BridgeState } from "./bridge-state.mjs";
-import { createIncomingTextDeduper, GUARDED_COMMANDS, runCommandSafely, unbindCurrent } from "./chat-routing.mjs";
+import { createIncomingTextDeduper, runCommandSafely, setPausedState, unbindCurrent } from "./chat-routing.mjs";
 import { loadConfig, saveRuntimeConfig } from "./config.mjs";
 import {
   discoverCompatibleStateDatabase,
@@ -133,7 +133,6 @@ async function main() {
 
   async function handleCommand(chatId, text) {
     const command = text.trim().split(/\s+/)[0];
-    if (!GUARDED_COMMANDS.has(command)) return handleCommandUnsafe(chatId, text);
     return runCommandSafely({
       command,
       operation: () => handleCommandUnsafe(chatId, text),
@@ -177,14 +176,20 @@ async function main() {
       return telegram.sendMessage(chatId, "已解除当前对话绑定。");
     }
     if (command === "/pause") {
-      state.pause();
-      config = await saveRuntimeConfig(config, { paused: true });
+      await setPausedState({
+        paused: true,
+        persist: async () => { config = await saveRuntimeConfig(config, { paused: true }); },
+        state
+      });
       await audit.write("pause", { command });
       return telegram.sendMessage(chatId, "Bridge paused. Status mirroring remains available; Telegram input will not execute until /resume.");
     }
     if (command === "/resume") {
-      state.resume();
-      config = await saveRuntimeConfig(config, { paused: false });
+      await setPausedState({
+        paused: false,
+        persist: async () => { config = await saveRuntimeConfig(config, { paused: false }); },
+        state
+      });
       await audit.write("resume");
       return telegram.sendMessage(chatId, "Bridge resumed.");
     }
@@ -201,7 +206,7 @@ async function main() {
         detectedTaskState: task.state
       }));
     }
-    return telegram.sendMessage(chatId, `Unknown command: ${command}`);
+    return telegram.sendMessage(chatId, `未知命令：${command}`);
   }
 
   async function handleMessage(update) {

@@ -3,6 +3,32 @@ import { promisify } from "node:util";
 
 const runFile = promisify(execFile);
 
+const composerDiscoveryPowerShell = String.raw`
+$bottomBandTop = $windowBottom - [Math]::Max(240, $windowHeight * 0.35)
+$allControls = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+$stopButton = @($allControls | Where-Object {
+  $control = $_.Current
+  $control.ControlType -eq [System.Windows.Automation.ControlType]::Button -and
+    @("Stop", "停止", "Cancel", "取消") -contains $control.Name
+} | Select-Object -First 1)
+$editable = @($allControls | Where-Object {
+  $control = $_.Current
+  $editableRect = $control.BoundingRectangle
+  $valuePattern = $null
+  $isWritable = $false
+  try {
+    if ($_.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$valuePattern)) {
+      $isWritable = -not $valuePattern.Current.IsReadOnly
+    }
+  } catch {}
+  ($control.ControlType -eq [System.Windows.Automation.ControlType]::Edit -or
+    $control.ControlType -eq [System.Windows.Automation.ControlType]::Document) -and
+    $isWritable -and $control.IsEnabled -and $control.IsKeyboardFocusable -and -not $control.IsOffscreen -and
+    -not [double]::IsInfinity($editableRect.X) -and -not [double]::IsInfinity($editableRect.Y) -and
+    $editableRect.Width -gt 0 -and $editableRect.Height -gt 0 -and $editableRect.Y -ge $bottomBandTop
+} | Sort-Object { $_.Current.BoundingRectangle.Y } -Descending | Select-Object -First 1)
+`;
+
 export async function getCodexDesktopConnectionStatus({ processName = "Codex", dryRun = false } = {}) {
   if (dryRun) return { connected: true };
   if (process.platform !== "win32") return { connected: false };
@@ -39,22 +65,36 @@ $ProcessName = '${quotePowerShellString(processName)}'
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class CodexLinkDesktopProbe {
+  [DllImport("user32.dll")]
+  public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
+  [DllImport("user32.dll")]
+  public static extern bool SwitchDesktop(IntPtr desktop);
+  [DllImport("user32.dll")]
+  public static extern bool CloseDesktop(IntPtr desktop);
+}
+"@
+$inputDesktop = [CodexLinkDesktopProbe]::OpenInputDesktop(0, $false, 0x0100)
+if ($inputDesktop -eq [IntPtr]::Zero) { throw "Windows is locked or the desktop is not interactive." }
+try {
+  if (-not [CodexLinkDesktopProbe]::SwitchDesktop($inputDesktop)) { throw "Windows is locked or the desktop is not interactive." }
+} finally {
+  $null = [CodexLinkDesktopProbe]::CloseDesktop($inputDesktop)
+}
 $process = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue |
   Where-Object { $_.MainWindowHandle -ne 0 } | Sort-Object StartTime -Descending | Select-Object -First 1
 if (-not $process) { throw "Codex desktop window is unavailable." }
-$root = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
-if (-not $root) { throw "Windows is locked or Codex desktop is not interactive." }
-$rootRect = $root.Current.BoundingRectangle
-$bottomBandTop = $rootRect.Bottom - [Math]::Max(240, $rootRect.Height * 0.35)
-$names = @("Stop", "停止", "Cancel", "取消")
-$buttons = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-$running = @($buttons | Where-Object {
-  $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button -and
-  $_.Current.IsEnabled -and -not $_.Current.IsOffscreen -and
-  -not [double]::IsInfinity($_.Current.BoundingRectangle.Y) -and
-  $_.Current.BoundingRectangle.Y -ge $bottomBandTop -and $names -contains $_.Current.Name
-} | Select-Object -First 1)
-if ($running) { 'running' } else { 'idle' }
+$rootElement = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
+if (-not $rootElement) { throw "Windows is locked or Codex desktop is not interactive." }
+$rootRect = $rootElement.Current.BoundingRectangle
+$windowBottom = $rootRect.Bottom
+$windowHeight = $rootRect.Height
+${composerDiscoveryPowerShell}
+if ($stopButton) { 'running'; exit }
+if ($editable) { 'idle' } else { 'unknown' }
 `;
   return ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script];
 }
@@ -170,30 +210,13 @@ $rootElement = [System.Windows.Automation.AutomationElement]::FromHandle($proces
 if (-not $rootElement) {
   throw "Windows is locked or the Codex desktop window is not interactive."
 }
-$allControls = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-$bottomBandTop = $rect.Bottom - [Math]::Max(240, $height * 0.35)
-$stopButton = @($allControls | Where-Object {
-  $control = $_.Current
-  $buttonRect = $control.BoundingRectangle
-  $control.ControlType -eq [System.Windows.Automation.ControlType]::Button -and
-    @("Stop", "停止", "Cancel", "取消") -contains $_.Current.Name -and
-    $control.IsEnabled -and
-    -not [double]::IsInfinity($buttonRect.Y) -and
-    $buttonRect.Y -ge $bottomBandTop
-} | Select-Object -First 1)
+$windowBottom = $rect.Bottom
+$windowHeight = $height
+${composerDiscoveryPowerShell}
 if ($stopButton) {
   throw "Codex desktop is still running (Stop button is visible). Wait until the current turn finishes, then send the Telegram message again."
 }
 
-$editable = @($allControls | Where-Object {
-  $control = $_.Current
-  $editableRect = $control.BoundingRectangle
-  ($control.ControlType -eq [System.Windows.Automation.ControlType]::Edit -or
-    $control.ControlType -eq [System.Windows.Automation.ControlType]::Document) -and
-    $control.IsEnabled -and $control.IsKeyboardFocusable -and -not $control.IsOffscreen -and
-    -not [double]::IsInfinity($editableRect.X) -and -not [double]::IsInfinity($editableRect.Y) -and
-    $editableRect.Width -gt 0 -and $editableRect.Height -gt 0 -and $editableRect.Y -ge $bottomBandTop
-} | Sort-Object { $_.Current.BoundingRectangle.Y } -Descending | Select-Object -First 1)
 if (-not $editable) {
   throw "Refusing to paste because the Codex input area could not be confirmed."
 }

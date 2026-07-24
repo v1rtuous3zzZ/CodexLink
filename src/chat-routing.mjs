@@ -26,8 +26,6 @@ function normalizeIncomingText(text) {
   return String(text || "").replace(/\r\n/g, "\n").trim();
 }
 
-export const GUARDED_COMMANDS = new Set(["/threads", "/bind", "/open", "/current", "/status", "/unbind"]);
-
 export async function runCommandSafely({ command, operation, sendFailure, auditFailure }) {
   try {
     return await operation();
@@ -39,6 +37,12 @@ export async function runCommandSafely({ command, operation, sendFailure, auditF
     }
     return sendFailure("命令执行失败，请稍后重试。");
   }
+}
+
+export async function setPausedState({ paused, persist, state }) {
+  await persist(paused);
+  if (paused) state.pause();
+  else state.resume();
 }
 
 export async function unbindCurrent({ persist, state, stopTail }) {

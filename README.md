@@ -85,9 +85,9 @@ Create `%USERPROFILE%\.codex\codexlink.local.json`:
 
 ```json
 {
-  "botToken": "123456:telegram-bot-token",
-  "allowedUserId": "123456789",
-  "allowedChatId": "123456789",
+  "botToken": "在此处由用户手动填写",
+  "allowedUserId": "在此处由用户手动填写",
+  "allowedChatId": "在此处由用户手动填写",
   "pollIntervalMs": 1500,
   "paused": false,
   "dryRun": false,
@@ -104,7 +104,7 @@ Keep this file private. It contains the Telegram bot token. Runtime values such 
 Open Codex Desktop, then run:
 
 ```powershell
-npm start
+.\start.bat
 ```
 
 For a local startup check that does not contact Telegram or control the desktop:
@@ -118,7 +118,7 @@ Only one CodexLink process may use the configured lock at a time.
 ## First Use
 
 1. Open Codex Desktop and keep the target task visible.
-2. Start CodexLink with `npm start`.
+2. Start CodexLink with `.\start.bat`.
 3. Send `/ping` from the configured private Telegram chat.
 4. Send `/threads`.
 5. Send `/bind 1` or `/open 1`.

@@ -75,11 +75,34 @@ test("task status detection recognizes English and Chinese stop buttons", () => 
   assert.match(script, /'idle'/);
 });
 
+test("task status is running when a stop button exists", () => {
+  const script = buildWindowsTaskStatusPowerShellArgs({ processName: "Codex" })[4];
+  assert.match(script, /if \(\$stopButton\) \{ 'running'; exit \}/);
+});
+
+test("task status is idle only when the shared composer rule finds an input", () => {
+  const statusScript = buildWindowsTaskStatusPowerShellArgs({ processName: "Codex" })[4];
+  const inputScript = buildWindowsInputPowerShellArgs({ processName: "Codex", encodedText: "abc123" })[4];
+  const composerRule = /\(\$control\.ControlType -eq \[System\.Windows\.Automation\.ControlType\]::Edit[\s\S]+?Sort-Object \{ \$_\.Current\.BoundingRectangle\.Y \} -Descending \| Select-Object -First 1\)/;
+
+  assert.match(statusScript, composerRule);
+  assert.match(inputScript, composerRule);
+  assert.match(statusScript, /if \(\$editable\) \{ 'idle' \} else \{ 'unknown' \}/);
+});
+
+test("task status is unknown when neither stop button nor composer exists", () => {
+  const script = buildWindowsTaskStatusPowerShellArgs({ processName: "Codex" })[4];
+  assert.doesNotMatch(script, /if \(\$running\) \{ 'running' \} else \{ 'idle' \}/);
+  assert.match(script, /else \{ 'unknown' \}/);
+});
+
 test("composer discovery prefers enabled editable controls and refuses an unconfirmed target", () => {
   const script = buildWindowsInputPowerShellArgs({ processName: "Codex", encodedText: "abc123" })[4];
   assert.match(script, /ControlType\]::Edit/);
   assert.match(script, /ControlType\]::Document/);
   assert.match(script, /IsEnabled/);
+  assert.match(script, /ValuePattern\]::Pattern/);
+  assert.match(script, /IsReadOnly/);
   assert.match(script, /IsOffscreen/);
   assert.match(script, /IsInfinity\(\$editableRect\.Y\)/);
   assert.match(script, /Refusing to paste because the Codex input area could not be confirmed/);

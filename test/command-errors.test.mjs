@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
-import { GUARDED_COMMANDS, runCommandSafely, unbindCurrent } from "../src/chat-routing.mjs";
+import { runCommandSafely, setPausedState, unbindCurrent } from "../src/chat-routing.mjs";
 
-test("all data-dependent commands use unified exception handling", () => {
-  assert.deepEqual([...GUARDED_COMMANDS], ["/threads", "/bind", "/open", "/current", "/status", "/unbind"]);
+test("all commands pass through unified exception handling without a command whitelist", async () => {
+  const source = await readFile(new URL("../src/index.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /GUARDED_COMMANDS/);
+  assert.match(source, /if \(text\.startsWith\("\/"\)\) return handleCommand\(chatId, text\)/);
+  assert.match(source, /operation: \(\) => handleCommandUnsafe\(chatId, text\)/);
 });
 
 test("command exceptions return a short Chinese message without leaking local paths", async () => {
@@ -19,6 +23,26 @@ test("command exceptions return a short Chinese message without leaking local pa
   assert.deepEqual(messages, ["命令执行失败，请稍后重试。"]);
   assert.doesNotMatch(messages[0], /C:\\|sqlite|rollout/i);
   assert.match(audits[0].error, /state_5\.sqlite/);
+});
+
+test("pause config write failure leaves runtime state unchanged and is catchable", async () => {
+  const calls = [];
+  await assert.rejects(() => setPausedState({
+    paused: true,
+    persist: async () => { throw new Error("save failed"); },
+    state: { pause: () => calls.push("pause"), resume: () => calls.push("resume") }
+  }), /save failed/);
+  assert.deepEqual(calls, []);
+});
+
+test("resume config write failure leaves runtime state unchanged and is catchable", async () => {
+  const calls = [];
+  await assert.rejects(() => setPausedState({
+    paused: false,
+    persist: async () => { throw new Error("save failed"); },
+    state: { pause: () => calls.push("pause"), resume: () => calls.push("resume") }
+  }), /save failed/);
+  assert.deepEqual(calls, []);
 });
 
 test("an audit failure cannot suppress the command failure response", async () => {
