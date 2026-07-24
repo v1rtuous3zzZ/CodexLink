@@ -34,6 +34,10 @@ export async function loadConfig(configPath = defaultConfigPath()) {
     }
   }
 
+  const outputEnabled = parsed.forwardOutput === undefined
+    ? !Boolean(parsed.paused)
+    : Boolean(parsed.forwardOutput);
+
   return {
     configPath,
     botToken: parsed.botToken || "",
@@ -41,13 +45,14 @@ export async function loadConfig(configPath = defaultConfigPath()) {
     allowedChatId: String(parsed.allowedChatId).trim(),
     pollIntervalMs: Number(parsed.pollIntervalMs || 1500),
     dryRun: Boolean(parsed.dryRun),
-    paused: Boolean(parsed.paused),
+    outputEnabled,
     accountLabel: String(parsed.accountLabel || "未配置").trim() || "未配置",
     boundThreadId: parsed.boundThreadId || null,
     lastUpdateId: Number.isFinite(Number(parsed.lastUpdateId)) ? Number(parsed.lastUpdateId) : 0,
     auditPath: parsed.auditPath || defaultAuditPath(),
     lockPath: parsed.lockPath || defaultLockPath(),
-    codexWindowProcessName: parsed.codexWindowProcessName || "Codex"
+    codexWindowProcessName: parsed.codexWindowProcessName || "Codex",
+    codexCommand: String(parsed.codexCommand || "codex").trim() || "codex"
   };
 }
 
@@ -60,13 +65,14 @@ export async function saveRuntimeConfig(config, patch) {
     allowedChatId: next.allowedChatId,
     pollIntervalMs: next.pollIntervalMs,
     dryRun: next.dryRun,
-    paused: next.paused,
+    forwardOutput: next.outputEnabled !== false,
     accountLabel: next.accountLabel,
     boundThreadId: next.boundThreadId,
     lastUpdateId: next.lastUpdateId,
     auditPath: next.auditPath,
     lockPath: next.lockPath || defaultLockPath(),
-    codexWindowProcessName: next.codexWindowProcessName
+    codexWindowProcessName: next.codexWindowProcessName,
+    codexCommand: next.codexCommand || "codex"
   };
   await writeFile(next.configPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
   return next;
