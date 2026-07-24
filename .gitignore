@@ -1,0 +1,11 @@
+node_modules/
+*.log
+*.png
+.tmp/
+.env
+*.local.json
+*.audit.ndjson
+*.lock.json
+*.pid
+coverage/
+.DS_Store
