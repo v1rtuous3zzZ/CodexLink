@@ -2,9 +2,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { stat } from "node:fs/promises";
 
 import { AuditLog } from "./audit.mjs";
+import { isAuthorizedTelegramMessage } from "./authorization.mjs";
 import { BridgeState } from "./bridge-state.mjs";
-import { createIncomingTextDeduper, resolveOutputChatId, shouldPersistTelegramChatId } from "./chat-routing.mjs";
-import { sendInputWithCodexExec } from "./codex-cli.mjs";
+import { createIncomingTextDeduper } from "./chat-routing.mjs";
 import { loadConfig, saveRuntimeConfig } from "./config.mjs";
 import {
   discoverCompatibleStateDatabase,
@@ -15,22 +15,13 @@ import {
   verifyRolloutPath
 } from "./codex-state.mjs";
 import { openCodexThread } from "./codex-deeplink.mjs";
-import {
-  findLatestProjectFile,
-  formatBytes,
-  formatFileCaption,
-  formatFileList,
-  listProjectFiles,
-  resolveProjectFile
-} from "./file-access.mjs";
 import { createDeduper } from "./rollout-parser.mjs";
 import { RolloutTail } from "./rollout-tail.mjs";
 import { TelegramClient } from "./telegram.mjs";
-import { sendInputToCodexWindow } from "./windows-control.mjs";
+import { getCodexDesktopConnectionStatus, sendInputToCodexWindow } from "./windows-control.mjs";
 import { HELP_TEXT } from "./help.mjs";
-import { formatPingResponse } from "./health.mjs";
-import { formatInputModeResponse, parseInputModeArg } from "./input-mode.mjs";
-import { formatUpdatesResponse, parseUpdatesArg, shouldForwardEvent } from "./output-routing.mjs";
+import { formatPingResponse, formatStatusResponse } from "./health.mjs";
+import { shouldForwardEvent } from "./output-routing.mjs";
 import { waitForFileGrowth } from "./rollout-watch.mjs";
 import { acquireSingleInstanceLock } from "./single-instance.mjs";
 
@@ -56,7 +47,6 @@ async function main() {
   let offset = config.lastUpdateId ? config.lastUpdateId + 1 : 0;
   let databasePath = null;
   let tail = null;
-  let lastChatId = config.telegramChatId || null;
   const deduper = createDeduper();
   const incomingDeduper = createIncomingTextDeduper();
 
@@ -66,19 +56,18 @@ async function main() {
     return discovered;
   }
 
-  async function bindCurrent(chatId, { rebind = false } = {}) {
+  async function bindCurrent(chatId) {
     await refreshDatabase();
     const candidate = await getCurrentThreadCandidate({ databasePath });
-    return bindThread(chatId, candidate, { rebind });
+    return bindThread(chatId, candidate);
   }
 
-  async function bindThread(chatId, thread, { rebind = false, opened = false } = {}) {
+  async function bindThread(chatId, thread, { opened = false } = {}) {
     await verifyRolloutPath({ threadId: thread.id, rolloutPath: thread.rolloutPath });
-    if (rebind) state.rebind(thread);
-    else state.bind(thread);
+    state.bind(thread);
     config = await saveRuntimeConfig(config, { boundThreadId: thread.id, paused: state.paused });
-    tail = await createTail(thread, chatId);
-    await audit.write(rebind ? "rebind" : "bind", { threadId: thread.id, title: thread.title, cwd: thread.cwd, opened });
+    tail = await createTail(thread);
+    await audit.write("bind", { threadId: thread.id, opened });
     await telegram.sendMessage(chatId, `${opened ? "Opened and bound" : "Bound"} to Codex thread:\n${thread.title}\n${thread.id}`);
   }
 
@@ -86,7 +75,7 @@ async function main() {
     await refreshDatabase();
     const threads = await listDesktopThreads({ databasePath, query, limit: 10 });
     state.noteThreadList(threads);
-    await audit.write("threads_list", { query, count: threads.length });
+    await audit.write("threads_list", { queryLength: query.length, count: threads.length });
     await telegram.sendMessage(chatId, formatThreadList(threads, query));
     return threads;
   }
@@ -106,29 +95,16 @@ async function main() {
     }
   }
 
-  async function createTail(thread, chatId) {
+  async function createTail(thread) {
     const nextTail = new RolloutTail({
       threadId: thread.id,
       rolloutPath: thread.rolloutPath,
       deduper,
       startAtEnd: true,
       onEvent: async (event) => {
-        const targetChatId = resolveOutputChatId({
-          explicitChatId: chatId,
-          lastChatId,
-          configChatId: config.telegramChatId
-        });
-        if (!targetChatId) {
-          await audit.write("forward_skipped_no_chat", { threadId: thread.id, kind: event.kind, length: event.text.length });
-          return;
-        }
-        if (!shouldForwardEvent(event, { forwardStatusUpdates: config.forwardStatusUpdates })) {
-          await audit.write("forward_skipped_status_disabled", { threadId: thread.id, kind: event.kind, length: event.text.length });
-          return;
-        }
-        await telegram.sendMessage(targetChatId, event.text);
-        state.noteForwarded(event);
-        await audit.write("forwarded", { threadId: thread.id, kind: event.kind, length: event.text.length, chatId: targetChatId });
+        if (!shouldForwardEvent(event)) return;
+        await telegram.sendMessage(config.allowedChatId, event.text);
+        await audit.write("forwarded", { threadId: thread.id, kind: event.kind, length: event.text.length });
       }
     });
     await nextTail.initialize();
@@ -141,7 +117,7 @@ async function main() {
     const thread = await getThreadById({ databasePath, threadId: config.boundThreadId });
     await verifyRolloutPath({ threadId: thread.id, rolloutPath: thread.rolloutPath });
     state.bind(thread);
-    tail = await createTail(thread, chatId);
+    tail = await createTail(thread);
   }
 
   async function pollTailSafely() {
@@ -160,62 +136,27 @@ async function main() {
     const arg = rest.join(" ").trim();
     if (command === "/help") return telegram.sendMessage(chatId, HELP_TEXT);
     if (command === "/ping") {
-      await audit.write("ping", { chatId, boundThreadId: state.boundThread?.id || null, inputMode: config.inputMode });
+      await audit.write("ping", { boundThreadId: state.boundThread?.id || null });
       return telegram.sendMessage(chatId, formatPingResponse({
         boundThread: state.boundThread,
-        inputMode: config.inputMode,
         paused: state.paused
       }));
     }
-    if (command === "/mode") {
-      if (!arg) return telegram.sendMessage(chatId, formatInputModeResponse(config.inputMode));
-      const inputMode = parseInputModeArg(arg);
-      config = await saveRuntimeConfig(config, { inputMode });
-      await audit.write("mode", { inputMode });
-      return telegram.sendMessage(chatId, formatInputModeResponse(inputMode, { changed: true }));
-    }
-    if (command === "/updates") {
-      let next;
-      try {
-        next = parseUpdatesArg(arg);
-      } catch (error) {
-        return telegram.sendMessage(chatId, error.message);
-      }
-      if (next === null) return telegram.sendMessage(chatId, formatUpdatesResponse(config.forwardStatusUpdates));
-      config = await saveRuntimeConfig(config, { forwardStatusUpdates: next });
-      await audit.write("updates", { forwardStatusUpdates: next });
-      return telegram.sendMessage(chatId, formatUpdatesResponse(next, { changed: true }));
-    }
     if (command === "/threads") return listThreads(chatId, arg);
     if (command === "/current") return telegram.sendMessage(chatId, formatCurrentThread(state.boundThread));
-    if (command === "/files" || command === "/file" || command === "/latest") {
-      return handleFileCommand(chatId, command, arg);
-    }
     if (command === "/bind") {
       if (!arg) return bindCurrent(chatId);
       const thread = await resolveThreadForCommand(arg);
       return bindThread(chatId, thread);
     }
-    if (command === "/rebind") {
-      if (!arg) return bindCurrent(chatId, { rebind: true });
-      const thread = await resolveThreadForCommand(arg);
-      return bindThread(chatId, thread, { rebind: true });
-    }
     if (command === "/open") {
       if (!arg) return telegram.sendMessage(chatId, "Use /open <number, title, or thread id>. Try /threads first.");
       const thread = await resolveThreadForCommand(arg);
-      const openResult = await openCodexThread(thread.id, { dryRun: config.dryRun });
-      await audit.write("open_thread", { threadId: thread.id, title: thread.title, dryRun: config.dryRun, url: openResult.url });
-      return bindThread(chatId, thread, { rebind: true, opened: true });
+      await openCodexThread(thread.id, { dryRun: config.dryRun });
+      await audit.write("open_thread", { threadId: thread.id, dryRun: config.dryRun });
+      return bindThread(chatId, thread, { opened: true });
     }
-    if (command === "/unbind") {
-      state.unbind();
-      tail = null;
-      config = await saveRuntimeConfig(config, { boundThreadId: null });
-      await audit.write("unbind");
-      return telegram.sendMessage(chatId, "Unbound. Send /bind when the target Codex desktop chat is open.");
-    }
-    if (command === "/pause" || command === "/stop") {
+    if (command === "/pause") {
       state.pause();
       config = await saveRuntimeConfig(config, { paused: true });
       await audit.write("pause", { command });
@@ -227,85 +168,34 @@ async function main() {
       await audit.write("resume");
       return telegram.sendMessage(chatId, "Bridge resumed.");
     }
-    if (command === "/last") {
-      return telegram.sendMessage(chatId, state.lastAssistantText || state.lastStatusText || "No forwarded Codex message yet.");
-    }
     if (command === "/status") {
-      return telegram.sendMessage(chatId, formatStatus(state.status(), {
-        databasePath,
-        dryRun: config.dryRun,
-        inputMode: config.inputMode,
-        forwardStatusUpdates: config.forwardStatusUpdates,
-        fileAccessEnabled: config.fileAccessEnabled,
-        maxFileBytes: config.maxFileBytes
+      const desktop = await getCodexDesktopConnectionStatus({
+        processName: config.codexWindowProcessName,
+        dryRun: config.dryRun
+      });
+      return telegram.sendMessage(chatId, formatStatusResponse({
+        paused: state.paused,
+        desktopConnected: desktop.connected,
+        boundThread: state.boundThread
       }));
     }
     return telegram.sendMessage(chatId, `Unknown command: ${command}`);
   }
 
-  async function handleFileCommand(chatId, command, arg) {
-    try {
-      assertFileAccessReady();
-      if (command === "/files") {
-        const files = await listProjectFiles({
-          thread: state.boundThread,
-          query: arg,
-          limit: config.fileListLimit,
-          maxFileBytes: config.maxFileBytes
-        });
-        state.noteFileList(files);
-        await audit.write("files_list", { query: arg, count: files.length });
-        return telegram.sendMessage(chatId, formatFileList(files, arg));
-      }
-
-      const file = command === "/latest"
-        ? await findLatestProjectFile({ thread: state.boundThread, query: arg, maxFileBytes: config.maxFileBytes })
-        : await resolveProjectFile({
-          thread: state.boundThread,
-          selector: arg,
-          lastFileList: state.lastFileList,
-          maxFileBytes: config.maxFileBytes
-        });
-
-      await audit.write(command === "/latest" ? "latest_file_send" : "file_send", {
-        relativePath: file.relativePath,
-        size: file.size
-      });
-      return telegram.sendDocument(chatId, file.absolutePath, {
-        filename: file.fileName,
-        caption: formatFileCaption(file)
-      });
-    } catch (error) {
-      state.lastError = error.message;
-      await audit.write("file_failed", { command, length: arg.length, error: error.message });
-      return telegram.sendMessage(chatId, `File request was not completed: ${error.message}`);
-    }
-  }
-
-  function assertFileAccessReady() {
-    if (!config.fileAccessEnabled) throw new Error("File access is disabled in the local bridge config.");
-    if (!state.boundThread) throw new Error("No Codex thread is bound. Use /threads, then /bind <number> first.");
-  }
-
-  async function rememberTelegramChat(chatId) {
-    lastChatId = String(chatId);
-    if (shouldPersistTelegramChatId({ currentChatId: config.telegramChatId, nextChatId: chatId })) {
-      config = await saveRuntimeConfig(config, { telegramChatId: String(chatId) });
-    }
-  }
-
   async function handleMessage(update) {
     const message = update.message;
     if (!message?.text) return;
-    const senderId = String(message.from?.id || "");
     const chatId = message.chat?.id;
-    lastChatId = chatId;
 
-    if (senderId !== config.allowedUserId) {
-      await audit.write("rejected_sender", { senderId, chatId });
+    if (!isAuthorizedTelegramMessage(message, config)) {
+      await audit.write("rejected_telegram_message", {
+        senderId: String(message.from?.id || ""),
+        chatId: String(chatId || ""),
+        chatType: String(message.chat?.type || "unknown")
+      });
       return;
     }
-    await rememberTelegramChat(chatId);
+    const senderId = String(message.from.id);
 
     const text = message.text.trim();
     if (text.startsWith("/")) return handleCommand(chatId, text);
@@ -318,34 +208,22 @@ async function main() {
     }
 
     try {
-      let result;
-      if (config.inputMode === "desktop-ui") {
-        const rolloutBefore = await stat(state.boundThread.rolloutPath);
-        const openResult = await openCodexThread(state.boundThread.id, { dryRun: config.dryRun });
-        await audit.write("open_before_input", { threadId: state.boundThread.id, dryRun: config.dryRun, url: openResult.url });
-        if (!config.dryRun) await sleep(1000);
-        result = await sendInputToCodexWindow(text, {
-          processName: config.codexWindowProcessName,
-          dryRun: config.dryRun
-        });
-        if (!config.dryRun) {
-          await waitForFileGrowth(state.boundThread.rolloutPath, { fromSize: rolloutBefore.size });
-        }
-      } else {
-        result = await sendInputWithCodexExec(text, {
-          threadId: state.boundThread.id,
-          codexCommand: config.codexCommand,
-          cwd: state.boundThread.cwd,
-          dryRun: config.dryRun
-        });
+      const rolloutBefore = await stat(state.boundThread.rolloutPath);
+      await openCodexThread(state.boundThread.id, { dryRun: config.dryRun });
+      await audit.write("open_before_input", { threadId: state.boundThread.id, dryRun: config.dryRun });
+      if (!config.dryRun) await sleep(1000);
+      const result = await sendInputToCodexWindow(text, {
+        processName: config.codexWindowProcessName,
+        dryRun: config.dryRun
+      });
+      if (!config.dryRun) {
+        await waitForFileGrowth(state.boundThread.rolloutPath, { fromSize: rolloutBefore.size });
       }
       if (result.clipboardRestoreFailed) state.clipboardRestoreFailed = true;
       await audit.write("input_sent", {
         threadId: state.boundThread.id,
         length: text.length,
         dryRun: config.dryRun,
-        inputMode: config.inputMode,
-        cwd: state.boundThread.cwd,
         processId: result.processId
       });
     } catch (error) {
@@ -362,7 +240,7 @@ async function main() {
     });
   }
 
-  console.log(`Telegram Codex bridge running${config.dryRun ? " in dry-run mode" : ""}.`);
+  console.log(`CodexLink running${config.dryRun ? " in dry-run mode" : ""}.`);
   while (true) {
     try {
       await pollTailSafely();
@@ -389,23 +267,6 @@ async function main() {
   }
 }
 
-function formatStatus(status, { databasePath, dryRun, inputMode, forwardStatusUpdates, fileAccessEnabled, maxFileBytes }) {
-  const bound = status.boundThread
-    ? `${status.boundThread.title}\n${status.boundThread.id}\n${status.boundThread.rolloutPath}\n${status.boundThread.cwd || "cwd unknown"}`
-    : "none";
-  return [
-    `Bridge status: ${status.paused ? "paused" : "active"}`,
-    `Dry run: ${dryRun ? "yes" : "no"}`,
-    `Input mode: ${inputMode || "unknown"}`,
-    `Status updates: ${forwardStatusUpdates ? "enabled" : "disabled"}`,
-    `File access: ${fileAccessEnabled ? `enabled, ${formatBytes(maxFileBytes)} max` : "disabled"}`,
-    `State DB: ${databasePath || "not discovered yet"}`,
-    `Bound thread: ${bound}`,
-    `Clipboard restore issue: ${status.clipboardRestoreFailed ? "yes" : "no"}`,
-    `Last error: ${status.lastError || "none"}`
-  ].join("\n");
-}
-
 function formatThreadList(threads, query) {
   if (threads.length === 0) {
     return query ? `No desktop Codex chats matched "${query}".` : "No desktop Codex chats found.";
@@ -420,7 +281,7 @@ function formatThreadList(threads, query) {
 
 function formatCurrentThread(thread) {
   if (!thread) return "No Codex thread is bound. Use /threads, then /bind <number> or /open <number>.";
-  return `Current bound Codex thread:\n${thread.title}\n${thread.id}\n${thread.rolloutPath}\n${thread.cwd || "cwd unknown"}`;
+  return `Current bound Codex thread:\n${thread.title}\n${thread.id}`;
 }
 
 function formatAge(updatedAtMs) {

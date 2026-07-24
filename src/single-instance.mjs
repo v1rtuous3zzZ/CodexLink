@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 export function defaultLockPath() {
-  return path.join(os.homedir(), ".codex", "telegram-bridge.lock.json");
+  return path.join(os.homedir(), ".codex", "codexlink.lock.json");
 }
 
 export async function acquireSingleInstanceLock({ lockPath = defaultLockPath() } = {}) {

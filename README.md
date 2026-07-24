@@ -1,219 +1,152 @@
-# Codex Telegram Bridge
+# CodexLink
 
-A local Windows sidecar that lets one allowed Telegram user control an existing Codex Desktop chat.
+CodexLink is a personal Windows bridge between a private Telegram chat and Codex Desktop. It controls the visible Codex Desktop `desktop-ui`, sends Telegram text into the bound Codex task, and forwards human-facing Codex status updates and assistant replies back to Telegram.
 
-It mirrors human-facing Codex updates and final answers to Telegram, and it can send Telegram text back into the currently bound Codex chat.
+This repository is a reduced and stabilized personal edition based on [Tarikv1/codex-telegram-bridge](https://github.com/Tarikv1/codex-telegram-bridge).
 
-## What It Does
+## Supported Features
 
-- Polls the Telegram Bot API from your local machine.
-- Binds to one Codex Desktop chat at a time.
-- Mirrors visible Codex status messages and assistant answers to Telegram.
-- Sends Telegram input either through the visible Codex Desktop composer or through `codex exec resume`.
-- Sends requested files from the bound project folder to Telegram.
-- Can mute live status updates while still forwarding final assistant answers.
-- Refuses to start a second local bridge instance, which prevents Telegram polling conflicts.
-- Avoids forwarding tool logs, command output, hidden reasoning, token events, user messages, and raw rollout bodies.
+- Telegram Bot long polling.
+- Strict access control using both Telegram User ID and Chat ID.
+- Private chats only; group, supergroup, and channel messages are ignored.
+- Codex Desktop `desktop-ui` control on Windows.
+- Send Telegram text to the currently bound Codex Desktop task.
+- Forward human-facing Codex status updates and assistant replies to Telegram.
+- List, search, bind, and open Codex Desktop tasks.
+- Pause and resume Telegram input.
+- Single-process lock to prevent duplicate Telegram polling.
+- Metadata-only operational audit logs; full Telegram and Codex message bodies are not logged.
+
+## Commands
+
+```text
+/help
+/ping
+/threads
+/threads <search text>
+/bind
+/bind <number, title, or task id prefix>
+/open <number, title, or task id prefix>
+/current
+/status
+/pause
+/resume
+```
+
+`/status` displays only:
+
+- CodexLink running state.
+- Codex Desktop connection state.
+- Current bound task.
+- Current task state.
+
+It does not expose local paths, the Codex state database path, rollout paths, or internal debug details.
+
+## Removed From The Upstream Project
+
+- File listing, upload, and download capabilities.
+- `/files`, `/file`, and `/latest`.
+- `codex exec resume` and the `codex-exec` input mode.
+- Input-mode switching.
+- Commands unrelated to the retained personal workflow: `/updates`, `/rebind`, `/unbind`, `/last`, and `/stop`.
+- File-access configuration and Telegram `sendDocument` support.
+- Non-Windows/headless execution paths.
+
+No third-party npm packages are required.
 
 ## Requirements
 
-- Windows.
+- Windows 10 or Windows 11.
 - Node.js 20 or newer.
+- Python available as `python` in `PATH` (used read-only to inspect Codex Desktop's SQLite state).
 - Codex Desktop installed and signed in.
 - A Telegram bot token from [@BotFather](https://t.me/BotFather).
-- Your numeric Telegram user id.
+- Your numeric Telegram User ID and private Chat ID.
 
-## Install With Codex
+For a one-to-one bot conversation, the User ID and Chat ID are commonly the same numeric value, but both settings are mandatory and are checked independently.
 
-If you already use Codex Desktop, you can ask Codex to install this for you.
-
-Open a new Codex chat and paste:
-
-```text
-Please install and configure this project for me:
-https://github.com/Tarikv1/codex-telegram-bridge
-
-Use Windows PowerShell.
-Clone the repo into a normal local folder, run the test suite, create the local config file at %USERPROFILE%\.codex\telegram-bridge.local.json from the README template, and help me start the bridge.
-
-Important:
-- Do not commit or print my Telegram bot token.
-- Do not commit local config, logs, screenshots, Codex rollout files, or Codex state databases.
-- If you need my Telegram bot token or numeric user id, tell me exactly where to paste them locally.
-- After setup, guide me through /ping, /threads, /bind, and the first test message.
-- Explain how /files, /file, and /latest work without exposing files outside the bound project folder.
-```
-
-Codex should handle the clone, checks, config-file setup, and startup commands. You still need to provide your own Telegram bot token and numeric Telegram user id.
-
-## Manual Install
+## Install
 
 ```powershell
-git clone https://github.com/Tarikv1/codex-telegram-bridge.git
-cd codex-telegram-bridge
+git clone https://github.com/v1rtuous3zzZ/CodexLink.git
+Set-Location CodexLink
+npm install
 npm test
 ```
 
-No npm dependencies are required.
+`npm install` creates npm metadata but installs no third-party packages.
 
 ## Configure
 
-Create:
-
-```powershell
-%USERPROFILE%\.codex\telegram-bridge.local.json
-```
-
-Example:
+Create `%USERPROFILE%\.codex\codexlink.local.json`:
 
 ```json
 {
   "botToken": "123456:telegram-bot-token",
   "allowedUserId": "123456789",
+  "allowedChatId": "123456789",
   "pollIntervalMs": 1500,
   "paused": false,
   "dryRun": false,
   "boundThreadId": null,
-  "inputMode": "desktop-ui",
-  "forwardStatusUpdates": true,
-  "codexCommand": "codex",
-  "codexWindowProcessName": "Codex",
-  "fileAccessEnabled": true,
-  "maxFileBytes": 50000000,
-  "fileListLimit": 10
+  "codexWindowProcessName": "Codex"
 }
 ```
 
-Keep this file private. It contains your Telegram bot token.
+Keep this file private. It contains the Telegram bot token. Runtime values such as the last processed update and current binding are stored in the same local file; complete chat content is not stored there.
 
-## Run
+## Run On Windows
+
+Open Codex Desktop, then run:
 
 ```powershell
 npm start
 ```
 
-Dry run:
+For a local startup check that does not contact Telegram or control the desktop:
 
 ```powershell
 npm run dry-run
 ```
 
-Run only one bridge process for a Telegram bot token. If you start it twice, the second process exits before polling Telegram and tells you which existing PID owns the local lock.
+Only one CodexLink process may use the configured lock at a time.
 
 ## First Use
 
-1. Start Codex Desktop.
-2. Open the chat you want to control.
-3. Start the bridge with `npm start`.
-4. In Telegram, send `/ping`.
-5. Send `/threads` to list recent Codex chats.
-6. Send `/bind 1` or `/bind <title>` to bind a chat.
-7. Send a normal Telegram message.
+1. Open Codex Desktop and keep the target task visible.
+2. Start CodexLink with `npm start`.
+3. Send `/ping` from the configured private Telegram chat.
+4. Send `/threads`.
+5. Send `/bind 1` or `/open 1`.
+6. Send a normal text message.
 
-In `desktop-ui` mode, keep the target Codex chat visible and idle. If Codex shows a Stop button, the bridge refuses to paste and asks you to wait until the current turn finishes.
+CodexLink opens the bound task, focuses the visible Codex Desktop composer, pastes the text, submits it, and verifies that the task rollout changed. If the task is already running, CodexLink refuses to paste until the current turn finishes.
 
-## File Requests
+## Logs And Privacy
 
-After binding a Codex chat, you can ask Telegram for files from that chat's working folder:
+- Default audit log: `%USERPROFILE%\.codex\codexlink.audit.ndjson`.
+- The log records operational event metadata such as event type, task ID, message length, and errors.
+- It does not record complete Telegram input or forwarded Codex response bodies.
+- Telegram messages are accepted only when User ID, Chat ID, and private-chat type all match.
+- Codex state and rollout files are read only for task discovery and response forwarding.
+- CodexLink has no Telegram file-send API and no project file browsing commands.
 
-```text
-/files
-/files wav
-/file 1
-/file output/example.wav
-/latest .wav
-/latest html
-```
+## Not Implemented In This Phase
 
-`/files` lists recent sendable files with numbers. `/file 1` sends a file from the latest list. `/file <relative path>` sends a specific file. `/latest <extension or search text>` sends the newest matching file.
-
-For safety, file access is limited to the bound thread's recorded working folder. Requests outside that folder are rejected. The bridge also blocks common sensitive paths such as `.git`, `.codex`, `node_modules`, `.env`, `*.local.json`, `*.audit.ndjson`, SQLite/database files, and filenames that look like tokens, credentials, passwords, private keys, or secrets.
-
-Files are sent with Telegram `sendDocument`. The default `maxFileBytes` is `50000000`, matching Telegram's documented [Bot API file limit](https://core.telegram.org/bots/api#senddocument) for general files at the time this README was written. You can lower it in the local config.
-
-## Input Modes
-
-`desktop-ui` is the default. It focuses Codex Desktop, finds the visible composer, pastes your Telegram text, submits it, and verifies the rollout file changed.
-
-`codex-exec` sends text through `codex exec resume <thread-id>`. This is useful for headless execution, but the open desktop window may not live-update.
-
-Switch modes from Telegram:
-
-```text
-/mode desktop-ui
-/mode codex-exec
-```
-
-## Status Updates
-
-By default, Telegram receives both live Codex status updates and final assistant answers. To reduce noise, turn off the live status updates:
-
-```text
-/updates off
-```
-
-Final assistant answers are still forwarded. Turn live updates back on with:
-
-```text
-/updates on
-```
-
-## Telegram Commands
-
-```text
-/help
-/ping
-/mode
-/mode desktop-ui
-/mode codex-exec
-/updates
-/updates off
-/updates on
-/threads
-/threads example
-/current
-/files
-/files wav
-/file 1
-/file output/example.wav
-/latest .wav
-/bind
-/bind 1
-/bind <title>
-/bind <thread-id-prefix>
-/rebind 1
-/open 1
-/unbind
-/pause
-/resume
-/last
-/status
-/stop
-```
-
-Only the configured `allowedUserId` can control the bridge. Other Telegram senders are ignored.
-
-## Privacy And Safety
-
-- Do not commit `telegram-bridge.local.json`.
-- Do not commit audit logs, screenshots, rollout files, or Codex state databases.
-- The bridge writes metadata-only audit logs by default.
-- Mirrored messages are limited to human-facing status updates and assistant-visible output.
-- Raw command output, tool calls, reasoning events, token events, and hidden logs are intentionally filtered out.
-- `/updates off` mutes live status updates only; final assistant answers continue to be forwarded.
-- File requests are restricted to the bound project folder and are audited by relative path, size, and command metadata only.
+- Codex quota queries.
+- Switching Telegram/Codex accounts.
+- Enhanced task-completion notifications.
+- Output redaction.
+- A graphical UI.
 
 ## Troubleshooting
 
-- `No Codex thread is bound`: open Codex Desktop, send `/threads`, then `/bind 1`.
-- `Codex desktop is still running`: wait until the current Codex turn finishes, then send again.
-- `foreground window is ... not Codex`: bring Codex Desktop to the front and retry.
-- `rollout file did not change`: the desktop composer did not accept the input; make sure the target chat is visible and idle.
-- Too many live messages: send `/updates off`.
-- `bridge is already running as PID ...`: stop the existing bridge terminal first, or end that PID if it is stale.
-- Telegram `Conflict: terminated by other getUpdates request`: another bridge or bot process is polling the same token. Stop the duplicate process and start only one bridge.
-- `File request was not completed`: send `/current` to confirm the bound chat has a working folder, then use `/files` before `/file 1`.
-- No Telegram replies: send `/ping`, check that `botToken` and `allowedUserId` are correct, and confirm the bridge process is still running.
+- `Missing required config value`: add `botToken`, `allowedUserId`, and `allowedChatId` to the local config.
+- No Telegram response: confirm the message is from the configured user in the configured private chat.
+- `No Codex thread is bound`: use `/threads`, then `/bind <number>` or `/open <number>`.
+- `Codex desktop window was not found`: start Codex Desktop and ensure it has a visible main window.
+- `Codex desktop is still running`: wait for the current Codex turn to finish and retry.
+- Duplicate-instance or Telegram polling conflict: stop the other CodexLink process before starting a new one.
 
 ## License
 

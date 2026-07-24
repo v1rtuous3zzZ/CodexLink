@@ -3,6 +3,21 @@ import { promisify } from "node:util";
 
 const runFile = promisify(execFile);
 
+export async function getCodexDesktopConnectionStatus({ processName = "Codex", dryRun = false } = {}) {
+  if (dryRun) return { connected: true };
+  if (process.platform !== "win32") return { connected: false };
+  const script = `$process = Get-Process -Name '${quotePowerShellString(processName)}' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1; if ($process) { 'connected' } else { 'disconnected' }`;
+  try {
+    const { stdout } = await runFile("powershell.exe", ["-NoProfile", "-Command", script], {
+      maxBuffer: 64 * 1024,
+      timeout: 5000
+    });
+    return { connected: String(stdout).trim() === "connected" };
+  } catch {
+    return { connected: false };
+  }
+}
+
 export async function sendInputToCodexWindow(text, { processName = "Codex", dryRun = false } = {}) {
   if (dryRun) return { ok: true, dryRun: true, clipboardRestoreFailed: false };
   if (process.platform !== "win32") {
