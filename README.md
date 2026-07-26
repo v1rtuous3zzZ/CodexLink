@@ -2,7 +2,7 @@
 
 CodexLink 是一个仅供个人使用的 Windows Telegram 远程客户端。
 
-它不再模拟鼠标、键盘、剪贴板或 Codex Desktop 输入框，而是启动 Codex Desktop 自带的官方 `app-server`，通过 `thread/*` 和 `turn/*` 接口操作同一套 Codex 账号、项目和会话数据。
+它不再模拟鼠标、键盘、剪贴板或 Codex Desktop 输入框，而是启动独立的官方 `app-server`，通过 `thread/*` 和 `turn/*` 接口操作 Codex 账号、项目和会话。CodexLink 与 Codex Desktop 是两个独立客户端。
 
 你不需要在命令行中使用 Codex CLI。CodexLink 会自动寻找 Codex Desktop 安装产生的 `codex.exe`；找不到时可在本地配置中填写路径。
 
@@ -195,6 +195,8 @@ Windows 睡眠或关机不属于 CodexLink 的唤醒范围。
 /3 最近会话三
 ```
 
+回复 `/0` 后会创建并绑定新 thread。下一条普通消息会直接在这个新 thread 中开始第一轮任务。
+
 项目来源是 `thread/list` 返回的历史会话工作目录。一个从未创建过 Codex 会话的目录不会自动出现在列表中。
 
 ### CodexSwitch
@@ -248,9 +250,9 @@ CodexLink直接复用 CodexSwitch 的本地结构：
 
 ## Desktop 显示说明
 
-CodexLink 和 Codex Desktop 使用同一套本地会话存储。通过 app-server 创建或继续的会话会保存在 Codex 会话历史中。
+CodexLink 使用自己启动的独立 app-server。Telegram 创建或继续的 thread 是否立刻、重启后或始终显示在 Codex Desktop 列表中，取决于当前 Codex Desktop 和 app-server 版本，CodexLink 不对此作保证。
 
-如果某个会话已经在 Desktop 界面中打开，另一个 app-server 客户端写入新一轮后，当前打开的页面可能不会立即实时刷新；重新打开该会话即可看到最新内容。这不影响 Telegram 侧任务执行和历史保存。
+Desktop 是否显示不影响 CodexLink 继续绑定该 thread、发送任务、读取最近回答和接收最终结果。Telegram 侧流程正常即可。
 
 ## 验证
 
@@ -258,4 +260,4 @@ CodexLink 和 Codex Desktop 使用同一套本地会话存储。通过 app-serve
 npm test
 ```
 
-测试直接调用生产命令路由，覆盖普通消息、运行中引导、项目和会话选择、`/m` 清空、最终回答、额度解析、原子配置和唤醒服务。
+测试直接调用生产命令路由，覆盖普通消息、运行中引导、项目和会话选择、`/0` 新建后发送第一条任务、`/m` 清空、最终回答、额度解析、原子配置和唤醒服务。
