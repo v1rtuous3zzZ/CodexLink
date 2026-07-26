@@ -1,36 +1,14 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import test from "node:test";
 
-import { TelegramClient } from "../src/telegram.mjs";
+import { splitTelegramText, toTelegramPlainText } from "../src/telegram.mjs";
 
-test("getUpdates passes an abort signal to Telegram fetch", async () => {
-  const previousFetch = globalThis.fetch;
-  try {
-    globalThis.fetch = async (_url, options) => {
-      assert.ok(options?.signal instanceof AbortSignal);
-      return { json: async () => ({ ok: true, result: [] }) };
-    };
-
-    const telegram = new TelegramClient({ botToken: "token", requestTimeoutMs: 1000 });
-    const updates = await telegram.getUpdates({ offset: 10, timeout: 1 });
-
-    assert.deepEqual(updates, []);
-  } finally {
-    globalThis.fetch = previousFetch;
-  }
+test("cleans artifact markup without markdown parse mode", () => {
+  assert.equal(toTelegramPlainText("[file](C:/work/file.js)\n<text>done</text>"), "file\ndone");
 });
 
-test("sendMessage passes an abort signal to Telegram fetch", async () => {
-  const previousFetch = globalThis.fetch;
-  try {
-    globalThis.fetch = async (_url, options) => {
-      assert.ok(options?.signal instanceof AbortSignal);
-      return { json: async () => ({ ok: true, result: {} }) };
-    };
-
-    const telegram = new TelegramClient({ botToken: "token", requestTimeoutMs: 1000 });
-    await telegram.sendMessage(123, "hello");
-  } finally {
-    globalThis.fetch = previousFetch;
-  }
+test("splits long telegram text", () => {
+  const chunks = splitTelegramText("a".repeat(8000), 3900);
+  assert.equal(chunks.length, 3);
+  assert.ok(chunks.every((chunk) => chunk.length <= 3900));
 });

@@ -1,21 +1,16 @@
 {
   "name": "codexlink",
-  "version": "1.0.0",
-  "description": "Personal Windows bridge between Telegram and Codex Desktop.",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "keywords": [
-    "codex",
-    "telegram",
-    "bridge",
-    "desktop",
-    "automation"
-  ],
-  "license": "MIT",
+  "description": "Personal Telegram remote client for Codex Desktop app-server.",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node src/index.mjs",
-    "test": "node --test",
-    "dry-run": "node src/index.mjs --dry-run"
+    "dry-run": "node src/index.mjs --dry-run",
+    "test": "node --test"
   },
   "dependencies": {},
   "devDependencies": {}

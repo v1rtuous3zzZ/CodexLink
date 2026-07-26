@@ -1,0 +1,12 @@
+{
+  "botToken": "由用户本地填写",
+  "botUsername": "v1rtuous_bot",
+  "allowedUserId": "Telegram 用户数字 ID",
+  "allowedChatId": "Telegram 聊天数字 ID",
+  "forwardOutput": true,
+  "dryRun": false,
+  "diagnosticsMode": "debug",
+  "wakePort": 17321,
+  "idlePauseMs": 900000,
+  "codexExecutable": ""
+}

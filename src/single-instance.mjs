@@ -1,67 +1,43 @@
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { mkdir, open, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 
-export function defaultLockPath() {
-  return path.join(os.homedir(), ".codex", "codexlink.lock.json");
-}
-
-export async function acquireSingleInstanceLock({ lockPath = defaultLockPath() } = {}) {
-  mkdirSync(path.dirname(lockPath), { recursive: true });
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const fd = openSync(lockPath, "wx");
-      const lock = {
-        pid: process.pid,
-        createdAt: new Date().toISOString(),
-        lockPath
-      };
-      writeFileSync(fd, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
-      return {
-        ...lock,
-        release: async () => {
-          try {
-            closeSync(fd);
-          } catch {
-            // Already closed during process shutdown.
-          }
-          rmSync(lockPath, { force: true });
-        }
-      };
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      const existing = readExistingLock(lockPath);
-      if (isProcessAlive(existing.pid)) {
-        throw new Error(`Telegram Codex bridge is already running as PID ${existing.pid}. Stop that process before starting another bridge.`);
-      }
-      rmSync(lockPath, { force: true });
-    }
-  }
-
-  throw new Error(`Could not acquire Telegram bridge lock at ${lockPath}.`);
-}
-
-acquireSingleInstanceLock.writeStaleLockForTest = async (lockPath, lock) => {
-  mkdirSync(path.dirname(lockPath), { recursive: true });
-  writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
-};
-
-function readExistingLock(lockPath) {
+export async function acquireSingleInstanceLock({ lockPath }) {
+  await mkdir(path.dirname(lockPath), { recursive: true });
   try {
-    return JSON.parse(readFileSync(lockPath, "utf8"));
-  } catch {
-    return {};
+    const handle = await open(lockPath, "wx");
+    await handle.writeFile(String(process.pid), "utf8");
+    return createLock(handle, lockPath);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
   }
+
+  const existingPid = Number(String(await readFile(lockPath, "utf8")).trim());
+  if (Number.isInteger(existingPid) && existingPid > 0 && isProcessAlive(existingPid)) {
+    throw new Error(`CodexLink 已在运行，PID ${existingPid}`);
+  }
+  await unlink(lockPath).catch(() => {});
+  const handle = await open(lockPath, "wx");
+  await handle.writeFile(String(process.pid), "utf8");
+  return createLock(handle, lockPath);
+}
+
+function createLock(handle, lockPath) {
+  let released = false;
+  return {
+    async release() {
+      if (released) return;
+      released = true;
+      await handle.close().catch(() => {});
+      await unlink(lockPath).catch(() => {});
+    }
+  };
 }
 
 function isProcessAlive(pid) {
-  const value = Number(pid);
-  if (!Number.isInteger(value) || value <= 0) return false;
   try {
-    process.kill(value, 0);
+    process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return error.code === "EPERM";
   }
 }

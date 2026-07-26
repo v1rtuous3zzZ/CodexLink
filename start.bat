@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 where node >nul 2>nul
 if errorlevel 1 (
-  echo Node.js was not found. Install Node.js 20 or newer and try again.
+  echo Node.js 22 or newer was not found.
   pause
   exit /b 1
 )
