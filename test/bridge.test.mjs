@@ -99,6 +99,21 @@ test("project and thread selection use real app server methods", async () => {
   assert.equal(state.boundThread.id, "thread-2");
 });
 
+test("project menu new thread is bound and used by the next message", async () => {
+  const { bridge, telegram, state, codex } = createHarness();
+  await bridge.handleTelegramUpdate(update("/list"));
+  await bridge.handleTelegramUpdate(update("/1", 11));
+  await bridge.handleTelegramUpdate(update("/0", 12));
+
+  assert.equal(state.boundThread.id, "thread-new");
+  assert.match(telegram.messages.at(-1), /已新建并绑定/);
+  assert.equal(codex.turns.length, 0);
+
+  await bridge.handleTelegramUpdate(update("检查新会话", 13));
+  assert.deepEqual(codex.turns[0], { threadId: "thread-new", text: "检查新会话" });
+  assert.equal(state.run.turnId, "turn-new");
+});
+
 test("new command creates and starts a thread", async () => {
   const { bridge, telegram, state } = createHarness();
   await bridge.handleTelegramUpdate(update("/new 修复问题"));
