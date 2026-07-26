@@ -7,8 +7,8 @@ import { test } from "node:test";
 import { canSendOutput, shouldForwardEvent } from "../src/output-routing.mjs";
 import { RolloutTail } from "../src/rollout-tail.mjs";
 
-test("forwards only human-facing Codex status and assistant events", () => {
-  assert.equal(shouldForwardEvent({ kind: "status" }), true);
+test("forwards only final Codex assistant events by default", () => {
+  assert.equal(shouldForwardEvent({ kind: "status" }), false);
   assert.equal(shouldForwardEvent({ kind: "assistant" }), true);
   assert.equal(shouldForwardEvent({ kind: "tool" }), false);
 });

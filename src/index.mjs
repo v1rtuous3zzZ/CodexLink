@@ -24,6 +24,20 @@ import {
 import { loadConfig, saveRuntimeConfig } from "./config.mjs";
 import { COMMAND_HELP, COMMANDS, parseCommand } from "./commands.mjs";
 import {
+  displayReason,
+  formatModelName,
+  formatModelMenu,
+  formatReasonMenu,
+  readCurrentModel,
+  readCurrentReason,
+  readDesktopModelMenu,
+  resolveModelNumber,
+  resolveModelShortcut,
+  resolveReasonNumber,
+  selectDesktopModel,
+  selectDesktopReasoning
+} from "./desktop-model.mjs";
+import {
   discoverCompatibleStateDatabase,
   getCurrentThreadCandidate,
   getThreadById,
@@ -32,7 +46,7 @@ import {
   verifyRolloutPath
 } from "./codex-state.mjs";
 import { openCodexThread } from "./codex-deeplink.mjs";
-import { canSendOutput, shouldForwardEvent } from "./output-routing.mjs";
+import { canSendOutput } from "./output-routing.mjs";
 import {
   formatCreateThreadSuccess,
   formatProjectList,
@@ -46,7 +60,9 @@ import { RolloutTail } from "./rollout-tail.mjs";
 import { waitForFileGrowth } from "./rollout-watch.mjs";
 import { acquireSingleInstanceLock } from "./single-instance.mjs";
 import { TelegramClient } from "./telegram.mjs";
+import { telegramPollMode } from "./telegram-poll.mjs";
 import { formatAssistantHistory, readRecentAssistantHistory } from "./thread-history.mjs";
+import { createWakeSignal, startWakeServer } from "./wake-server.mjs";
 import {
   createCodexDesktopThread,
   getCodexDesktopTaskStatus,
@@ -56,18 +72,9 @@ import {
 } from "./windows-control.mjs";
 
 const args = new Set(process.argv.slice(2));
-const ACTIVE_TELEGRAM_WINDOW_MS = 30 * 60 * 1000;
-const ACTIVE_TELEGRAM_POLL = {
-  timeoutSeconds: 1,
-  requestTimeoutMs: 30000,
-  intervalMs: 300,
-  errorDelayMs: 1000
-};
-const IDLE_TELEGRAM_POLL = {
-  timeoutSeconds: 10,
-  requestTimeoutMs: 15000,
-  errorDelayMs: 3000
-};
+const RECENT_THREAD_SCAN_LIMIT = 5;
+const NEW_THREAD_WAIT_ATTEMPTS = 120;
+const NEW_THREAD_WAIT_DELAY_MS = 500;
 async function main() {
   let config = await loadConfig();
   if (args.has("--dry-run")) config = { ...config, dryRun: true };
@@ -88,10 +95,12 @@ async function main() {
   const telegram = new TelegramClient({ botToken: config.botToken, dryRun: config.dryRun });
   const deduper = createDeduper();
   const incomingDeduper = createIncomingTextDeduper();
+  const wakeSignal = createWakeSignal();
   let offset = config.lastUpdateId ? config.lastUpdateId + 1 : 0;
   let databasePath = null;
   let tail = null;
-  let lastTelegramActivityAt = 0;
+  let lastTelegramActivityAt = Date.now();
+  let lastWakeNoticeAt = 0;
 
   async function refreshDatabase() {
     const discovered = await discoverCompatibleStateDatabase();
@@ -134,6 +143,21 @@ async function main() {
     return telegram.sendMessage(chatId, boundText);
   }
 
+  await startWakeServer({
+    port: config.wakePort,
+    wakeSignal,
+    audit,
+    onWake: () => {
+      const now = Date.now();
+      lastTelegramActivityAt = now;
+      if (now - lastWakeNoticeAt < 10000) return;
+      lastWakeNoticeAt = now;
+      telegram.sendMessage(config.allowedChatId, "CodexLink 已唤醒").catch((error) => {
+        audit.write("wake_notice_failed", { error: error.message }).catch(() => {});
+      });
+    }
+  });
+
   async function createTail(thread) {
     const nextTail = new RolloutTail({
       threadId: thread.id,
@@ -141,7 +165,7 @@ async function main() {
       deduper,
       startAtEnd: true,
       onEvent: async (event) => {
-        if (!shouldForwardEvent(event)) return;
+        if (!event?.text) return;
         if (event.kind === "status") {
           state.noteCodexRunDetail(event.text);
           if (!state.codexRunStartedAtMs) state.markCodexRunStarted();
@@ -266,32 +290,40 @@ async function main() {
 
   async function createThreadForProject(chatId, project, { initialText = "" } = {}) {
     const hasInitialText = Boolean(initialText.trim());
+    await telegram.sendMessage(
+      chatId,
+      hasInitialText ? "正在新建 Codex 任务并发送内容..." : "正在新建 Codex 任务..."
+    );
     const beforeIds = await snapshotProjectThreadIds(project);
-    if (!hasInitialText) await telegram.sendMessage(chatId, "正在新建 Codex 会话...");
     await createCodexDesktopThread({
       processName: config.codexWindowProcessName,
-      projectName: project.name,
+      projectName: project.displayName || project.name,
       dryRun: config.dryRun
     });
     state.notePendingNewThread({ project, beforeIds });
     await audit.write("thread_create_pending", { cwdLength: project.cwd.length });
     if (!hasInitialText) await telegram.sendMessage(chatId, formatCreateThreadSuccess(project));
-    if (hasInitialText) return sendTextToCodex(chatId, "command:/new", initialText);
+    if (hasInitialText) return sendTextToCodex(chatId, "command:/new", initialText, { progressMessage: null });
   }
 
-  async function waitForNewProjectThread({ project, beforeIds, attempts = 40, delayMs = 500 }) {
+  async function waitForNewProjectThread({
+    project,
+    beforeIds,
+    attempts = NEW_THREAD_WAIT_ATTEMPTS,
+    delayMs = NEW_THREAD_WAIT_DELAY_MS
+  }) {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       await refreshDatabase();
       const threads = await listProjectThreads({
         databasePath,
         cwd: project.databaseCwd,
-        limit: 1000
+        limit: RECENT_THREAD_SCAN_LIMIT
       });
       const thread = threads.find((item) => !beforeIds.has(item.id));
       if (thread) return thread;
       if (attempt + 1 < attempts) await sleep(delayMs);
     }
-    throw new Error("New Codex desktop thread was not written to local state.");
+    throw new Error("Codex 新任务已触发，但本地 state 在等待超时前没有写入新任务。");
   }
 
   async function snapshotProjectThreadIds(project) {
@@ -299,7 +331,7 @@ async function main() {
     const threads = await listProjectThreads({
       databasePath,
       cwd: project.databaseCwd,
-      limit: 1000
+      limit: RECENT_THREAD_SCAN_LIMIT
     });
     return new Set(threads.map((thread) => thread.id));
   }
@@ -344,7 +376,7 @@ async function main() {
   }
 
   async function handleCommand(chatId, text) {
-    const { command, argument } = parseCommand(text);
+    const { command, argument } = parseCommand(text, { botUsername: config.botUsername });
     await audit.write("command_received", {
       command,
       argumentLength: argument.length
@@ -358,7 +390,7 @@ async function main() {
   }
 
   async function handleCommandUnsafe(chatId, command, argument = "") {
-    if ((command === "/y" || command === "/n") && state.currentSelectionMode() === "guidance_confirm") {
+    if ((command === "/y" || command === "/n") && ["guidance_confirm", "switch_confirm"].includes(state.currentSelectionMode())) {
       return handleSelection(chatId, command);
     }
     state.clearSelection();
@@ -376,13 +408,85 @@ async function main() {
     if (command === "/list") return showProjects(chatId);
     if (command === "/l") return showBoundThreadHistory(chatId);
     if (command === "/new") return createThreadForBoundProject(chatId, { initialText: argument });
-    if (command === "/b") return bindLatest(chatId);
+    if (command === "/b" || command === "/bind") return bindLatest(chatId);
     if (command === "/q") return showCurrentQuota(chatId);
     if (command === "/qs") return showAllQuotas(chatId);
     if (command === "/u") return showAccounts(chatId);
     if (command === "/t") return showRunningTime(chatId);
     if (command === "/m") return enableDetailedCurrentRun(chatId, { guidanceText: argument });
+    if (command === "/model") return handleModelCommand(chatId, argument);
+    if (command === "/reason") return switchReasoning(chatId, argument);
     if (command === "/s") return stopCurrentRun(chatId);
+  }
+
+  async function showModelMenu(chatId) {
+    const menu = await readDesktopModelMenu({
+      processName: config.codexWindowProcessName,
+      dryRun: config.dryRun
+    });
+    if (menu.models?.length) state.noteModelList(menu.models);
+    await audit.write("model_menu", { count: menu.models?.length || 0 });
+    return telegram.sendMessage(chatId, formatModelMenu(menu));
+  }
+
+  async function handleModelCommand(chatId, argument) {
+    const value = String(argument || "").trim();
+    if (!value) return showModelMenu(chatId);
+    const menu = await readDesktopModelMenu({
+      processName: config.codexWindowProcessName,
+      dryRun: config.dryRun
+    });
+    const model = resolveModelShortcut({ text: value, models: menu.models || [] });
+    if (!model) return telegram.sendMessage(chatId, "输入有误");
+    return confirmModelSwitch(chatId, model);
+  }
+
+  async function confirmModelSwitch(chatId, model) {
+    if (!model) return telegram.sendMessage(chatId, "输入有误");
+    state.noteSwitchCandidate({ type: "model", label: model, target: model });
+    await audit.write("model_switch_confirm_requested", { model });
+    return telegram.sendMessage(chatId, `确认切换模型：${formatModelName(model)}\n回复 /y 执行，回复 /n 取消`);
+  }
+
+  async function applyModelSwitch(chatId, model) {
+    const result = await selectDesktopModel({
+      processName: config.codexWindowProcessName,
+      model,
+      dryRun: config.dryRun
+    });
+    const currentModel = readCurrentModel(result.current);
+    const currentReason = readCurrentReason(result.current);
+    if (!currentModel) throw new Error("模型切换后未识别到当前模型。");
+    if (currentModel !== model) throw new Error(`模型切换未生效，当前识别为：${formatModelName(currentModel)} / ${currentReason || "未识别"}`);
+    await audit.write("model_selected", { requested: model, current: result.current, currentModel, currentReason });
+    return telegram.sendMessage(chatId, `已切换\n当前模型：${formatModelName(currentModel)}\n当前推理强度：${currentReason || "未识别"}`);
+  }
+
+  async function switchReasoning(chatId, reason) {
+    if (!String(reason || "").trim()) {
+      state.noteModelList(["低", "中", "高", "极高"]);
+      state.selectionMode = "reason";
+      return telegram.sendMessage(chatId, formatReasonMenu());
+    }
+    const target = displayReason(reason);
+    if (!target) return telegram.sendMessage(chatId, "输入有误");
+    state.noteSwitchCandidate({ type: "reason", label: target, target: reason });
+    await audit.write("reason_switch_confirm_requested", { reason: target });
+    return telegram.sendMessage(chatId, `确认切换推理强度：${target}\n回复 /y 执行，回复 /n 取消`);
+  }
+
+  async function applyReasoningSwitch(chatId, reason) {
+    const result = await selectDesktopReasoning({
+      processName: config.codexWindowProcessName,
+      reason,
+      dryRun: config.dryRun
+    });
+    const currentModel = readCurrentModel(result.current);
+    const currentReason = readCurrentReason(result.current);
+    if (!currentReason) throw new Error("推理强度切换后未识别到当前推理强度。");
+    if (currentReason !== displayReason(reason)) throw new Error(`推理强度切换未生效，当前识别为：${currentModel ? formatModelName(currentModel) : "未识别"} / ${currentReason}`);
+    await audit.write("reason_selected", { requested: displayReason(reason), current: result.current, currentModel, currentReason });
+    return telegram.sendMessage(chatId, `已切换\n当前模型：${currentModel ? formatModelName(currentModel) : "未识别"}\n当前推理强度：${currentReason}`);
   }
 
   async function showRunningTime(chatId) {
@@ -404,11 +508,15 @@ async function main() {
   }
 
   async function enableDetailedCurrentRun(chatId, { guidanceText = "" } = {}) {
+    const text = String(guidanceText || "").trim();
     const taskStatus = await getCodexDesktopTaskStatus({
       processName: config.codexWindowProcessName,
       dryRun: config.dryRun
     });
-    if (taskStatus.state !== "running") return telegram.sendMessage(chatId, "Codex 未运行");
+    if (taskStatus.state !== "running") {
+      if (text) return sendTextToCodex(chatId, "command:/m", text);
+      return telegram.sendMessage(chatId, "Codex 未运行");
+    }
     const details = state.enableCurrentRunDetails();
     await audit.write("current_run_details_enabled", {
       threadId: state.boundThread?.id || null,
@@ -416,7 +524,7 @@ async function main() {
     });
     const message = details.length === 0 ? "已开启本轮详细状态" : `已开启本轮详细状态\n\n${details.join("\n\n")}`;
     await telegram.sendMessage(chatId, message);
-    if (guidanceText.trim()) return sendGuidanceNow({ text: guidanceText, chatId }, chatId);
+    if (text) return sendGuidanceNow({ text, chatId }, chatId);
   }
 
   async function handleSelection(chatId, text) {
@@ -436,27 +544,55 @@ async function main() {
       await telegram.sendMessage(chatId, "输入有误");
       return true;
     }
-    if (mode === "project") {
-      if (!isNumberText(text)) {
-        await telegram.sendMessage(chatId, "输入有误");
+    if (mode === "switch_confirm") {
+      const pending = isYes(text) ? state.consumeSwitchCandidate() : null;
+      if (!pending) {
+        state.cancelSwitchCandidate();
+        await telegram.sendMessage(chatId, "已取消");
         return true;
+      }
+      if (pending.type === "model") await applyModelSwitch(chatId, pending.target);
+      else if (pending.type === "reason") await applyReasoningSwitch(chatId, pending.target);
+      else await telegram.sendMessage(chatId, "输入有误");
+      return true;
+    }
+    if (mode === "project") {
+      if (!isMenuNumberText(text)) {
+        state.clearSelection();
+        return false;
       }
       await selectProject(chatId, resolveProjectNumber({ text, projects: state.lastProjectList }));
       return true;
     }
     if (mode === "account") {
-      if (!isNumberText(text)) {
-        await telegram.sendMessage(chatId, "输入有误");
-        return true;
+      if (!isMenuNumberText(text)) {
+        state.clearSelection();
+        return false;
       }
       await selectAccount(chatId, resolveAccountNumber({ text, accounts: state.lastAccountList }));
       return true;
     }
-    if (!isNumberText(text)) {
-      await telegram.sendMessage(chatId, "输入有误");
+    if (mode === "model") {
+      if (!isMenuNumberText(text)) {
+        state.clearSelection();
+        return false;
+      }
+      await confirmModelSwitch(chatId, resolveModelNumber({ text, models: state.lastModelList }));
       return true;
     }
-    await selectThread(chatId, Number(text));
+    if (mode === "reason") {
+      if (!isMenuNumberText(text)) {
+        state.clearSelection();
+        return false;
+      }
+      await switchReasoning(chatId, resolveReasonNumber(text));
+      return true;
+    }
+    if (!isMenuNumberText(text)) {
+      state.clearSelection();
+      return false;
+    }
+    await selectThread(chatId, menuNumberValue(text));
     return true;
   }
 
@@ -476,7 +612,9 @@ async function main() {
     lastTelegramActivityAt = Date.now();
 
     const text = message.text.trim();
-    const command = text.startsWith("/") ? parseCommand(text).command : null;
+    const command = text.startsWith("/") && !isMenuNumberText(text)
+      ? parseCommand(text, { botUsername: config.botUsername }).command
+      : null;
     if (shouldAutoEnableOutput({ command, outputEnabled: state.outputEnabled })) {
       await setOutputEnabled(true, { automatic: true });
     }
@@ -494,12 +632,13 @@ async function main() {
       await audit.write("selection_failed", { error: error.message });
       return telegram.sendMessage(chatId, stripEndingPeriod(error.message) || "失败");
     }
+    if (text.startsWith("/")) return handleCommand(chatId, text);
 
     const senderId = String(message.from.id);
     return sendTextToCodex(chatId, senderId, text);
   }
 
-  async function sendTextToCodex(chatId, senderId, text) {
+  async function sendTextToCodex(chatId, senderId, text, { progressMessage = "已收到，正在发送到 Codex..." } = {}) {
     state.clearSelection();
     if (!state.canExecuteInput()) {
       return telegram.sendMessage(chatId, "输入有误");
@@ -514,13 +653,17 @@ async function main() {
       return;
     }
 
+    if (progressMessage) await telegram.sendMessage(chatId, progressMessage);
+
     try {
       const pendingNewThread = state.pendingNewThread;
       if (pendingNewThread) {
+        if (!config.dryRun) await sleep(1000);
         const result = await sendInputToCodexWindow(text, {
           processName: config.codexWindowProcessName,
           dryRun: config.dryRun
         });
+        if (result.clipboardRestoreFailed) state.clipboardRestoreFailed = true;
         const thread = config.dryRun
           ? {
               id: "00000000-0000-4000-8000-000000000001",
@@ -535,9 +678,14 @@ async function main() {
               beforeIds: new Set(pendingNewThread.beforeIds)
             });
         state.consumePendingNewThread();
-        if (result.clipboardRestoreFailed) state.clipboardRestoreFailed = true;
         await audit.write("thread_created", { threadId: thread.id, cwdLength: pendingNewThread.project.cwd.length });
         await bindThread(chatId, thread, { notify: false });
+        await audit.write("input_sent", {
+          threadId: thread.id,
+          length: text.length,
+          dryRun: config.dryRun,
+          processId: result.processId
+        });
         state.markCodexRunStarted();
         await telegram.sendMessage(chatId, "发送成功，Codex 正在处理中...");
         return;
@@ -648,9 +796,17 @@ async function main() {
 
   console.log(`CodexLink running${config.dryRun ? " in dry-run mode" : ""}.`);
   while (true) {
-    const pollMode = telegramPollMode({ lastActivityAt: lastTelegramActivityAt, baseIntervalMs: config.pollIntervalMs });
+    const pollMode = telegramPollMode({
+      lastActivityAt: state.codexRunStartedAtMs ? Date.now() : lastTelegramActivityAt
+    });
     try {
+      if (pollMode.paused) {
+        state.pruneExpired();
+        await wakeSignal.wait();
+        continue;
+      }
       await pollTailSafely();
+      state.pruneExpired();
       const updates = await telegram.getUpdates({
         offset,
         timeout: pollMode.timeoutSeconds,
@@ -672,23 +828,17 @@ async function main() {
       await audit.write("loop_error", { error: error.message });
       console.error(error.message);
       await pollTailSafely();
-      await sleep(pollMode.errorDelayMs);
+      await wakeSignal.wait(pollMode.errorDelayMs);
     }
-    await sleep(pollMode.intervalMs);
+    const sleepResult = await wakeSignal.wait(pollMode.intervalMs);
+    if (sleepResult === "wake") {
+      lastTelegramActivityAt = Date.now();
+    }
   }
 }
 
-function telegramPollMode({ lastActivityAt, baseIntervalMs, nowMs = Date.now() }) {
-  const active = lastActivityAt > 0 && nowMs - lastActivityAt < ACTIVE_TELEGRAM_WINDOW_MS;
-  if (active) return ACTIVE_TELEGRAM_POLL;
-  return {
-    ...IDLE_TELEGRAM_POLL,
-    intervalMs: Math.max(Number(baseIntervalMs) || 1500, 1500)
-  };
-}
-
 function formatProjectThreads(project, threads) {
-  const lines = ["0. 新建会话", ...threads.map((thread, index) => `${index + 1}. ${cleanTitle(thread.title)}`)];
+  const lines = ["/0 新建会话", ...threads.map((thread, index) => `/${index + 1} ${cleanTitle(thread.title)}`)];
   return `${project.name}：\n${lines.join("\n")}\n\n回复序号`;
 }
 
@@ -716,8 +866,12 @@ function isNo(text) {
   return String(text || "").trim().toLowerCase() === "/n";
 }
 
-function isNumberText(text) {
-  return /^\d+$/.test(String(text || "").trim());
+function isMenuNumberText(text) {
+  return /^\/?\d+$/.test(String(text || "").trim());
+}
+
+function menuNumberValue(text) {
+  return Number(String(text || "").trim().replace(/^\//, ""));
 }
 
 function guidanceTextFromYesPrefix(text) {

@@ -15,13 +15,13 @@ test("reads the latest two assistant history records from a rollout", async () =
       JSON.stringify({ type: "response_item", timestamp: "2026-07-24T01:01:00.000Z", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "第一条" }] } }),
       JSON.stringify({ type: "response_item", timestamp: "2026-07-24T01:02:00.000Z", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "第二条" }] } }),
       JSON.stringify({ type: "response_item", timestamp: "2026-07-24T01:03:00.000Z", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "第二条" }] } }),
-      JSON.stringify({ type: "event_msg", timestamp: "2026-07-24T01:04:00.000Z", payload: { type: "agent_message", phase: "final_answer", message: "第三条" } })
+      JSON.stringify({ type: "response_item", timestamp: "2026-07-24T01:04:00.000Z", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "第三条" }] } })
     ].join("\n"), "utf8");
 
     const events = await readRecentAssistantHistory({ rolloutPath, limit: 2 });
 
     assert.deepEqual(events.map((event) => event.text), ["第二条", "第三条"]);
-    assert.equal(formatAssistantHistory(events), "本会话最近 2 条历史记录：\n\n1. 第二条\n\n2. 第三条");
+    assert.equal(formatAssistantHistory(events), "本会话最近 2 条历史记录：\n\n/1 第二条\n\n/2 第三条");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

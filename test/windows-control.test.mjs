@@ -36,30 +36,32 @@ test("verifies Codex is foreground before touching clipboard or sending keys", (
   assert.ok(script.indexOf("Refusing to paste") < script.indexOf("SendWait"));
 });
 
-test("clicks the Codex composer area before pasting input", () => {
+test("focuses the Codex composer through UIA before pasting input", () => {
   const script = buildWindowsInputPowerShellArgs({
     processName: "Codex",
     encodedText: "abc123"
   })[4];
 
   assert.match(script, /GetWindowRect/);
-  assert.match(script, /SetCursorPos/);
-  assert.match(script, /mouse_event/);
-  assert.ok(script.indexOf("Refusing to paste") < script.indexOf("[Win32]::SetCursorPos"));
-  assert.ok(script.indexOf("[Win32]::mouse_event(0x0004") < script.indexOf("Set-Clipboard"));
+  assert.match(script, /\$editable\.SetFocus\(\)/);
+  assert.match(script, /FocusedElement/);
+  assert.match(script, /focused Codex input area could not be confirmed/);
+  assert.doesNotMatch(script, /SetCursorPos/);
+  assert.doesNotMatch(script, /mouse_event/);
+  assert.ok(script.indexOf("$editable.SetFocus()") < script.indexOf("Set-Clipboard"));
 });
 
-test("aims composer click using a bottom editable control", () => {
+test("confirms composer by finding a bottom editable control", () => {
   const script = buildWindowsInputPowerShellArgs({
     processName: "Codex",
     encodedText: "abc123"
   })[4];
 
-  assert.match(script, /\$editableY = \[int\]\(\$editableRect\.Y/);
-  assert.match(script, /\$composerY = \$editableY/);
-  assert.match(script, /\$height \* 0\.12/);
-  assert.doesNotMatch(script, /\$height \* 0\.07/);
-  assert.doesNotMatch(script, /\$height \* 0\.88/);
+  assert.match(script, /\$bottomBandTop = \$windowBottom - \[Math\]::Max\(240, \$windowHeight \* 0\.35\)/);
+  assert.match(script, /\$editableRect\.Y -ge \$bottomBandTop/);
+  assert.match(script, /\$editableRect\.X -ge \$mainContentLeft/);
+  assert.doesNotMatch(script, /\$composerX/);
+  assert.doesNotMatch(script, /\$composerY/);
 });
 
 test("refuses to paste when Codex is still running", () => {
@@ -74,7 +76,7 @@ test("refuses to paste when Codex is still running", () => {
   assert.ok(script.indexOf("Codex desktop is still running") < script.indexOf("Set-Clipboard"));
 });
 
-test("desktop thread creation invokes the project new-task button", () => {
+test("desktop thread creation invokes the project new-task button by label", () => {
   const args = buildCreateCodexDesktopThreadPowerShellArgs({
     processName: "ChatGPT",
     projectName: "CodexLink"
@@ -84,7 +86,14 @@ test("desktop thread creation invokes the project new-task button", () => {
   assert.match(args[4], /\$ProjectName = 'CodexLink'/);
   assert.match(args[4], /ShowWindowAsync\(\$process\.MainWindowHandle, 3\)/);
   assert.match(args[4], /在 \$ProjectName 中新建任务/);
+  assert.match(args[4], /"新建任务", "New task", "New Task"/);
+  assert.match(args[4], /Codex desktop new-task button was not found/);
+  assert.match(args[4], /Codex desktop new-task button is not visible/);
   assert.match(args[4], /InvokePattern/);
+  assert.match(args[4], /new-task button cannot be invoked/);
+  assert.doesNotMatch(args[4], /SetCursorPos/);
+  assert.doesNotMatch(args[4], /mouse_event/);
+  assert.doesNotMatch(args[4], /\$rootRect\.X \+ 75/);
 });
 
 test("task status detection recognizes English and Chinese stop buttons", () => {
@@ -129,6 +138,28 @@ test("composer discovery prefers enabled editable controls and refuses an unconf
   assert.match(script, /IsOffscreen/);
   assert.match(script, /IsInfinity\(\$editableRect\.Y\)/);
   assert.match(script, /Refusing to paste because the Codex input area could not be confirmed/);
+});
+
+test("composer discovery ignores editable project-name controls in the sidebar", () => {
+  const script = buildWindowsInputPowerShellArgs({ processName: "Codex", encodedText: "abc123" })[4];
+
+  assert.match(script, /\$mainContentLeft = \$windowLeft \+ \[Math\]::Max\(260, \$windowWidth \* 0\.25\)/);
+  assert.match(script, /\$editableRect\.X -ge \$mainContentLeft/);
+  assert.doesNotMatch(script, /\$editableX/);
+});
+
+test("input sending closes project popovers and focuses the composer before paste", () => {
+  const script = buildWindowsInputPowerShellArgs({ processName: "Codex", encodedText: "abc123" })[4];
+
+  assert.ok(script.indexOf('SendWait("{ESC}")') < script.indexOf("$rootElement ="));
+  assert.ok(script.indexOf("$editable.SetFocus()") < script.indexOf("Set-Clipboard"));
+  assert.doesNotMatch(script, /\[Win32\]::SetCursorPos/);
+});
+
+test("retries composer discovery before refusing to paste", () => {
+  const script = buildWindowsInputPowerShellArgs({ processName: "Codex", encodedText: "abc123" })[4];
+  assert.match(script, /for \(\$attempt = 0; -not \$editable -and \$attempt -lt 5; \$attempt\+\+\)/);
+  assert.ok(script.indexOf("for ($attempt = 0") < script.indexOf("Refusing to paste because the Codex input area could not be confirmed"));
 });
 
 test("detects a locked or non-interactive Windows desktop before pasting", () => {
