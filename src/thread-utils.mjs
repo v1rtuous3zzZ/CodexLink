@@ -39,7 +39,7 @@ export function groupProjects(threads) {
 
 export function formatProjectList(projects) {
   if (!projects.length) return "没有找到 Codex 项目会话";
-  return `项目：\n${projects.map((project, index) => `/${index + 1} ${project.name}`).join("\n")}\n\n回复项目序号`;
+  return `项目：\n${projects.map((project, index) => `/${index + 1} ${truncateText(project.name, 80)}`).join("\n")}\n\n回复项目序号`;
 }
 
 export function formatThreadList(project, threads) {
@@ -77,8 +77,8 @@ export function findActiveTurn(thread) {
 export function statusTextFromItem(item, phase = "completed") {
   if (!item || typeof item !== "object") return "";
   if (item.type === "reasoning") {
-    const summary = Array.isArray(item.summary) ? item.summary.join("\n") : String(item.summary || "");
-    return summary.trim();
+    const summary = extractText(item.summary || item.text || item.content);
+    return summary.trim() || (phase === "started" ? "正在思考" : "");
   }
   if (item.type === "commandExecution") {
     const command = Array.isArray(item.command) ? item.command.join(" ") : String(item.command || "");
@@ -93,14 +93,28 @@ export function statusTextFromItem(item, phase = "completed") {
   return "";
 }
 
-function projectName(cwd) {
+export function extractText(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(extractText).filter(Boolean).join("\n");
+  if (typeof value === "object") {
+    for (const key of ["text", "summary", "content", "delta", "message"]) {
+      const text = extractText(value[key]);
+      if (text) return text;
+    }
+  }
+  return "";
+}
+
+export function projectName(cwd) {
   const normalized = String(cwd || "").replace(/[\\/]+$/, "");
   if (!normalized) return "未知项目";
   return normalized.includes("\\") ? path.win32.basename(normalized) : path.basename(normalized);
 }
 
 function normalizeCwd(cwd) {
-  return String(cwd || "").replace(/[\\/]+$/, "").toLowerCase();
+  return String(cwd || "").replace(/^\\\\\?\\/, "").replace(/[\\/]+$/, "").toLowerCase();
 }
 
 function cleanTitle(value) {

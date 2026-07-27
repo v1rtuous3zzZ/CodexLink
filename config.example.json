@@ -7,6 +7,6 @@
   "dryRun": false,
   "diagnosticsMode": "debug",
   "wakePort": 17321,
-  "idlePauseMs": 900000,
+  "idlePauseMs": 0,
   "codexExecutable": ""
 }

@@ -78,7 +78,7 @@ async function main() {
 
   while (true) {
     try {
-      const shouldPause = !state.isRunning && Date.now() - lastActivityAt >= config.idlePauseMs;
+      const shouldPause = config.idlePauseMs > 0 && !state.isRunning && Date.now() - lastActivityAt >= config.idlePauseMs;
       if (shouldPause) {
         if (!paused) {
           paused = true;

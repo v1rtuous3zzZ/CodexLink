@@ -18,3 +18,19 @@ test("loads and atomically updates runtime config", async () => {
   assert.equal(saved.lastUpdateId, 9);
   await rm(root, { recursive: true, force: true });
 });
+
+test("idle pause can be disabled", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codexlink-config-"));
+  const file = path.join(root, "config.json");
+  await writeFile(file, JSON.stringify({
+    botToken: "token",
+    allowedUserId: "1",
+    allowedChatId: "2",
+    idlePauseMs: 0
+  }));
+
+  const config = await loadConfig(file);
+
+  assert.equal(config.idlePauseMs, 0);
+  await rm(root, { recursive: true, force: true });
+});

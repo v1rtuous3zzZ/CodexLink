@@ -1,7 +1,7 @@
 const DEFINITIONS = [
   { name: "/list", description: "项目列表" },
-  { name: "/history", aliases: ["/l"], description: "最近 3 条回答" },
-  { name: "/new", description: "当前项目新建会话，可直接带内容", acceptsArgument: true },
+  { name: "/history", aliases: ["/l"], description: "最近回答" },
+  { name: "/new", description: "新会话，可带内容", acceptsArgument: true },
   { name: "/bind", aliases: ["/b"], description: "绑定最新会话" },
   { name: "/quota", aliases: ["/q"], description: "当前账号额度" },
   { name: "/quotas", aliases: ["/qs"], description: "全部账号额度" },
@@ -9,7 +9,7 @@ const DEFINITIONS = [
   { name: "/on", description: "开启最终结果推送" },
   { name: "/off", description: "关闭最终结果推送" },
   { name: "/time", aliases: ["/t"], description: "本轮运行时长" },
-  { name: "/middle", aliases: ["/m"], description: "查看并清空本轮中间状态" },
+  { name: "/middle", aliases: ["/m"], description: "中间状态" },
   { name: "/stop", aliases: ["/s"], description: "停止当前回答" },
   { name: "/help", description: "帮助" }
 ];
@@ -43,8 +43,11 @@ export function parseCommand(text, { botUsername = "" } = {}) {
   const lower = value.toLowerCase();
   for (const candidate of argumentCommands) {
     const suffixCandidate = botUsername ? `${candidate}@${botUsername.toLowerCase()}` : "";
-    for (const prefix of [candidate, suffixCandidate].filter(Boolean)) {
+    for (const prefix of [suffixCandidate, candidate].filter(Boolean)) {
       if (!lower.startsWith(prefix)) continue;
+      const next = value[prefix.length] || "";
+      if (prefix === suffixCandidate && /^[A-Za-z0-9_]$/.test(next)) continue;
+      if (prefix === candidate && next === "@") continue;
       const argument = value.slice(prefix.length).trim();
       if (!argument) continue;
       const definition = commandMap.get(candidate);

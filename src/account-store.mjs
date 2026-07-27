@@ -164,9 +164,9 @@ export async function restartCodexDesktop({ dryRun = false } = {}) {
   if (dryRun || process.platform !== "win32") return { ok: true, dryRun: true };
   const script = String.raw`
 $ErrorActionPreference = "Stop"
-$marker = "\\WindowsApps\\OpenAI.Codex_"
+$marker = "\WindowsApps\OpenAI.Codex_"
 $processes = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-  try { $_.Path -and ($_.ProcessName -eq "Codex" -or $_.Path.Contains($marker)) } catch { $false }
+  try { $_.Path -and (($_.ProcessName -eq "ChatGPT" -or $_.ProcessName -eq "Codex") -and $_.Path.Contains($marker)) } catch { $false }
 })
 foreach ($process in $processes) {
   if ($process.MainWindowHandle -ne 0) { $null = $process.CloseMainWindow() }
@@ -175,7 +175,7 @@ if ($processes.Count -gt 0) { Start-Sleep -Seconds 2 }
 foreach ($process in $processes) {
   if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
 }
-Start-Process "shell:AppsFolder\\OpenAI.Codex_2p2nqsd0c76g0!App"
+Start-Process "shell:AppsFolder\OpenAI.Codex_2p2nqsd0c76g0!App"
 `;
   await runFile("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
     timeout: 20_000,

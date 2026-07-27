@@ -1,14 +1,20 @@
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+
+import { writeJsonAtomic } from "./utils.mjs";
 
 export class CodexAppServerClient extends EventEmitter {
-  constructor({ executable, diagnostics, dryRun = false, connectTimeoutMs = 12_000 } = {}) {
+  constructor({ executable, diagnostics, dryRun = false, connectTimeoutMs = 12_000, modelsCachePath = defaultModelsCachePath() } = {}) {
     super();
     this.executable = executable;
     this.diagnostics = diagnostics;
     this.dryRun = dryRun;
     this.connectTimeoutMs = connectTimeoutMs;
+    this.modelsCachePath = modelsCachePath;
     this.child = null;
     this.socket = null;
     this.port = 0;
@@ -111,7 +117,7 @@ export class CodexAppServerClient extends EventEmitter {
     const result = await this.request("thread/start", {
       cwd,
       approvalPolicy: "never",
-      sandbox: "dangerFullAccess",
+      sandbox: "danger-full-access",
       experimentalRawEvents: true,
       persistExtendedHistory: false
     });
@@ -149,6 +155,7 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   async startInternal() {
+    await sanitizeModelsCache(this.modelsCachePath, this.diagnostics);
     this.port = await reservePort();
     const address = `ws://127.0.0.1:${this.port}`;
     await this.diagnostics?.event("app-server-start", { executable: this.executable, address });
@@ -158,7 +165,14 @@ export class CodexAppServerClient extends EventEmitter {
     });
     this.child.stderr?.on("data", (chunk) => {
       const text = String(chunk).trim();
-      if (text) this.diagnostics?.event("app-server-stderr", { text }).catch(() => {});
+      if (text) {
+        this.diagnostics?.event("app-server-stderr", { text }).catch(() => {});
+        if (text.includes("unknown variant `max`") || text.includes("unknown variant `ultra`")) {
+          sanitizeModelsCache(this.modelsCachePath, this.diagnostics).catch((error) => {
+            this.diagnostics?.error("models-cache-sanitize", error).catch(() => {});
+          });
+        }
+      }
     });
     this.child.stdout?.on("data", (chunk) => {
       const text = String(chunk).trim();
@@ -257,6 +271,7 @@ export class CodexAppServerClient extends EventEmitter {
     }
     this.pending.clear();
   }
+
 }
 
 async function reservePort() {
@@ -298,6 +313,42 @@ async function connectWebSocket(address, timeoutMs) {
     }
   }
   throw new Error(`无法连接 Codex app-server：${lastError?.message || "超时"}`);
+}
+
+export async function sanitizeModelsCache(modelsCachePath = defaultModelsCachePath(), diagnostics = null) {
+  if (!modelsCachePath) return false;
+  let cache;
+  try {
+    cache = JSON.parse(await readFile(modelsCachePath, "utf8"));
+  } catch {
+    return false;
+  }
+
+  let changed = false;
+  for (const model of Array.isArray(cache?.models) ? cache.models : []) {
+    if (model && !Object.hasOwn(model, "supports_reasoning_summaries")) {
+      model.supports_reasoning_summaries = false;
+      changed = true;
+    }
+    if (!Array.isArray(model?.supported_reasoning_levels)) continue;
+    const filtered = model.supported_reasoning_levels.filter((level) => {
+      const effort = String(level?.effort || "");
+      return effort !== "max" && effort !== "ultra";
+    });
+    if (filtered.length !== model.supported_reasoning_levels.length) {
+      model.supported_reasoning_levels = filtered;
+      changed = true;
+    }
+  }
+
+  if (!changed) return false;
+  await writeJsonAtomic(modelsCachePath, cache);
+  await diagnostics?.event("models-cache-sanitized", { path: modelsCachePath }).catch(() => {});
+  return true;
+}
+
+function defaultModelsCachePath() {
+  return path.join(os.homedir(), ".codex", "models_cache.json");
 }
 
 function dryRunResponse(method, params) {

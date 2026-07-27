@@ -48,12 +48,17 @@ export async function loadConfig(configPath = defaultConfigPath()) {
     errorPath: parsed.errorPath || defaultErrorPath(),
     lockPath: parsed.lockPath || defaultLockPath(),
     wakePort: Number(parsed.wakePort || 17321),
-    idlePauseMs: Math.max(60_000, Number(parsed.idlePauseMs || 15 * 60 * 1000)),
+    idlePauseMs: normalizeIdlePauseMs(parsed.idlePauseMs),
     codexExecutable: String(parsed.codexExecutable || "").trim(),
     boundThreadId: parsed.boundThreadId ? String(parsed.boundThreadId) : null,
     boundProjectCwd: parsed.boundProjectCwd ? String(parsed.boundProjectCwd) : "",
     lastUpdateId: Number.isFinite(Number(parsed.lastUpdateId)) ? Number(parsed.lastUpdateId) : 0
   };
+}
+
+function normalizeIdlePauseMs(value) {
+  if (Number(value) === 0) return 0;
+  return Math.max(60_000, Number(value || 15 * 60 * 1000));
 }
 
 export async function saveRuntimeConfig(config, patch) {

@@ -2,12 +2,14 @@ import { COMMAND_HELP, isMenuNumber, menuNumber, parseCommand } from "./commands
 import { formatElapsed, truncateText } from "./utils.mjs";
 import {
   extractRecentAssistantAnswers,
+  extractText,
   findActiveTurn,
   formatHistory,
   formatProjectList,
   formatThreadList,
   groupProjects,
   normalizeThread,
+  projectName,
   statusTextFromItem
 } from "./thread-utils.mjs";
 import { formatQuotaResult, restartCodexDesktop } from "./account-store.mjs";
@@ -125,9 +127,9 @@ export class CodexLinkBridge {
       return;
     }
 
-    if (method === "item/reasoning/summaryTextDelta" || method === "item/reasoning/summaryPartAdded") {
+    if (isReasoningProgressMethod(method)) {
       if (this.isCurrentRun(threadId, turnId)) {
-        const text = params.delta || params.text || params.summary || "";
+        const text = extractText(params.delta || params.text || params.summary || params.content || params.item);
         if (text) this.state.addStatus(text);
       }
       return;
@@ -174,7 +176,7 @@ export class CodexLinkBridge {
   }
 
   async sendUserText(chatId, text, updateId, { acknowledge = true } = {}) {
-    if (acknowledge) await this.telegram.sendMessage(chatId, "已收到，正在交给 Codex...");
+    if (acknowledge) await this.telegram.sendMessage(chatId, "已收到，交给 Codex...");
     if (!this.state.boundThread?.id) {
       throw new Error("尚未绑定会话，请先使用 /list 或 /bind");
     }
@@ -188,7 +190,7 @@ export class CodexLinkBridge {
         text,
         { clientUserMessageId: `telegram:${updateId}` }
       );
-      await this.telegram.sendMessage(chatId, "已发送到当前任务，Codex 将按这条引导继续处理");
+      await this.telegram.sendMessage(chatId, "已引导当前任务");
       return;
     }
 
@@ -197,7 +199,7 @@ export class CodexLinkBridge {
     });
     if (!turn?.id) throw new Error("Codex 没有返回 turn id");
     this.state.startRun({ turnId: turn.id, threadId: this.state.boundThread.id });
-    await this.telegram.sendMessage(chatId, "Codex 已开始思考并执行");
+    await this.telegram.sendMessage(chatId, "Codex 已开始");
   }
 
   async showProjects(chatId) {
@@ -209,11 +211,12 @@ export class CodexLinkBridge {
 
   async handleSelection(chatId, number, updateId) {
     const interaction = this.state.currentInteraction();
-    if (!interaction) throw new Error("选择已过期，请重新执行命令");
+    if (!interaction) throw new Error("选择已过期，请重试");
 
     if (interaction.type === "projects") {
       const project = interaction.items[number - 1];
       if (!project) throw new Error("项目序号无效");
+      this.config = await this.saveConfig({ boundProjectCwd: project.cwd });
       const threads = project.threads.slice(0, 3);
       this.state.setInteraction("threads", threads, { project });
       await this.telegram.sendMessage(chatId, formatThreadList(project, threads));
@@ -248,9 +251,9 @@ export class CodexLinkBridge {
   }
 
   async createThreadForCurrentProject(chatId, initialText, updateId) {
-    const cwd = this.state.boundThread?.cwd || this.config.boundProjectCwd;
+    const cwd = this.config.boundProjectCwd || this.state.boundThread?.cwd;
     if (!cwd) throw new Error("当前没有项目，请先使用 /list 选择项目");
-    await this.telegram.sendMessage(chatId, "已收到，正在新建 Codex 会话...");
+    await this.telegram.sendMessage(chatId, "正在新建会话...");
     await this.codex.start();
     const thread = await this.codex.startThread(cwd);
     if (!thread?.id) throw new Error("新会话创建失败");
@@ -267,7 +270,7 @@ export class CodexLinkBridge {
     const thread = (await this.codex.listThreads({ limit: 1 }))[0];
     if (!thread?.id) throw new Error("没有找到 Codex 会话");
     const bound = await this.resumeAndBind(thread.id);
-    await this.telegram.sendMessage(chatId, `已绑定：${bound.title}`);
+    await this.telegram.sendMessage(chatId, `已绑定：${projectName(bound.cwd)} / ${bound.title}`);
   }
 
   async showHistory(chatId) {
@@ -283,7 +286,7 @@ export class CodexLinkBridge {
   }
 
   async showAllQuotas(chatId) {
-    await this.telegram.sendMessage(chatId, "正在查询全部账号额度...");
+    await this.telegram.sendMessage(chatId, "正在查额度...");
     const results = await this.accounts.queryAllQuotas();
     if (!results.length) throw new Error("CodexSwitch 中没有保存账号");
     await this.telegram.sendMessage(chatId, results.map(formatQuotaResult).join("\n\n"));
@@ -295,7 +298,7 @@ export class CodexLinkBridge {
     const current = await this.accounts.currentAccount();
     this.state.setInteraction("accounts", accounts);
     const lines = accounts.map((account, index) => `/${index + 1} ${account.email}${account.name === current ? "（当前）" : ""}`);
-    await this.telegram.sendMessage(chatId, `账号：\n${lines.join("\n")}\n\n回复账号序号`);
+    await this.telegram.sendMessage(chatId, `账号：\n${lines.join("\n")}\n\n回复序号`);
   }
 
   async switchAccount(chatId, account) {
@@ -312,28 +315,33 @@ export class CodexLinkBridge {
   async setOutput(chatId, enabled) {
     this.state.outputEnabled = enabled;
     this.config = await this.saveConfig({ outputEnabled: enabled });
-    await this.telegram.sendMessage(chatId, enabled ? "已开启最终结果推送" : "已关闭最终结果推送");
+    await this.telegram.sendMessage(chatId, enabled ? "结果推送已开" : "结果推送已关");
   }
 
   async showTime(chatId) {
+    await this.recoverActiveRunFromBoundThread();
     if (!this.state.isRunning) return this.telegram.sendMessage(chatId, "Codex 当前未运行");
     await this.telegram.sendMessage(chatId, `Codex 已运行：${formatElapsed(this.state.run.startedAtMs)}`);
   }
 
   async showMiddle(chatId) {
+    await this.recoverActiveRunFromBoundThread();
     if (!this.state.isRunning) return this.telegram.sendMessage(chatId, "Codex 当前未运行");
     const statuses = this.state.drainStatuses();
     const header = `Codex 已运行：${formatElapsed(this.state.run.startedAtMs)}`;
-    const body = statuses.length
-      ? statuses.map((status, index) => `${index + 1}. ${status}`).join("\n")
-      : "当前尚无新的中间状态";
-    await this.telegram.sendMessage(chatId, `${header}\n\n${body}`);
+    const statusBody = statuses.length
+      ? `状态：\n${statuses.map((status, index) => `${index + 1}. ${status}`).join("\n")}`
+      : "状态：暂无";
+    const reply = String(this.state.run.finalText || "").trim();
+    const replyBody = reply ? `回复：\n${reply}` : "回复：暂无";
+    await this.telegram.sendMessage(chatId, `${header}\n\n${statusBody}\n\n${replyBody}`);
   }
 
   async stopRun(chatId) {
+    await this.recoverActiveRunFromBoundThread();
     if (!this.state.isRunning) return this.telegram.sendMessage(chatId, "Codex 当前未运行");
     await this.codex.interruptTurn(this.state.run.threadId, this.state.run.turnId);
-    await this.telegram.sendMessage(chatId, "已请求停止当前回答");
+    await this.telegram.sendMessage(chatId, "已请求停止");
   }
 
   async resumeAndBind(threadId) {
@@ -371,6 +379,18 @@ export class CodexLinkBridge {
     if (active) this.state.recoverRun({ turnId: active.id, threadId: normalized.id, startedAtMs: active.startedAtMs });
   }
 
+  async recoverActiveRunFromBoundThread() {
+    if (this.state.isRunning || !this.state.boundThread?.id) return;
+    await this.codex.start();
+    const thread = await this.codex.readThread(this.state.boundThread.id, { includeTurns: true });
+    if (!thread?.id) return;
+    const normalized = normalizeThread(thread);
+    this.state.bind(normalized);
+    this.loadedThreadId = normalized.id;
+    const active = findActiveTurn(thread);
+    if (active) this.state.recoverRun({ turnId: active.id, threadId: normalized.id, startedAtMs: active.startedAtMs });
+  }
+
   async runSafely(chatId, stage, operation) {
     try {
       return await operation();
@@ -391,4 +411,12 @@ export class CodexLinkBridge {
     if (turnId && this.state.run.turnId && turnId !== this.state.run.turnId) return false;
     return true;
   }
+}
+
+function isReasoningProgressMethod(method) {
+  return method === "item/reasoning/summaryTextDelta"
+    || method === "item/reasoning/summaryPartAdded"
+    || method === "item/reasoning/delta"
+    || method === "item/reasoning/textDelta"
+    || method === "item/reasoning/summaryDelta";
 }

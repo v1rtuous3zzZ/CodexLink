@@ -49,7 +49,7 @@ export class BridgeState {
     const value = String(text || "").trim();
     if (!value || this.run.statuses.at(-1) === value) return;
     this.run.statuses.push(value);
-    this.run.statuses = this.run.statuses.slice(-5);
+    this.run.statuses = this.run.statuses.slice(-20);
   }
 
   drainStatuses() {

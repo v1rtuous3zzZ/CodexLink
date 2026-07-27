@@ -19,6 +19,12 @@ test("removes the configured bot suffix", () => {
   assert.equal(parseCommand("/list@my_bot", { botUsername: "my_bot" }).command, "/list");
 });
 
+test("parses compact bot suffix content only at a real suffix boundary", () => {
+  assert.equal(parseCommand("/new@my_bot检查测试", { botUsername: "my_bot" }).argument, "检查测试");
+  assert.equal(parseCommand("/new@my_bot 检查测试", { botUsername: "my_bot" }).argument, "检查测试");
+  assert.equal(parseCommand("/new@my_botfix", { botUsername: "my_bot" }).definition, null);
+});
+
 test("unknown commands stay unknown", () => {
   const result = parseCommand("/unknown");
   assert.equal(result.definition, null);

@@ -27,7 +27,7 @@ CodexLink 是一个仅供个人使用的 Windows Telegram 远程客户端。
 - `/quota`、`/q`：查询当前账号额度
 - `/quotas`、`/qs`：查询全部账号额度
 - `/on`、`/off`：开启或关闭最终结果自动推送
-- 15 分钟空闲后停止 Telegram 轮询和 app-server，通过本地唤醒命令恢复
+- 默认保持唤醒轮询；如需省资源，可配置空闲休眠并通过本地唤醒命令恢复
 
 不包含模型切换、附件、语音、多用户、多 Bot、任务队列或 Web 界面。
 
@@ -85,7 +85,7 @@ Codex 已开始思考并执行
   "dryRun": false,
   "diagnosticsMode": "debug",
   "wakePort": 17321,
-  "idlePauseMs": 900000,
+  "idlePauseMs": 0,
   "codexExecutable": ""
 }
 ```
@@ -132,7 +132,15 @@ start-hidden.vbs
 
 ## 休眠与唤醒
 
-最近 15 分钟没有 Telegram 活动并且 Codex 没有运行任务时：
+默认配置：
+
+```json
+"idlePauseMs": 0
+```
+
+表示程序启动后保持唤醒状态，持续 Telegram 轮询。
+
+如果改成大于 0 的毫秒数，例如 `900000`，在没有 Telegram 活动并且 Codex 没有运行任务达到该时间后：
 
 - 停止 Telegram 轮询
 - 停止 Codex app-server 子进程
