@@ -22,7 +22,7 @@ export class TelegramClient {
     if (chatId === null || chatId === undefined || String(chatId).trim() === "") {
       throw new Error("Telegram chat id is required to send a message.");
     }
-    const chunks = splitTelegramText(text);
+    const chunks = splitTelegramText(toTelegramPlainText(text));
     for (const chunk of chunks) {
       if (this.dryRun) {
         this.logger.log(`[dry-run telegram -> ${chatId}] ${chunk}`);
@@ -54,6 +54,21 @@ export function splitTelegramText(text, limit = 3900) {
   const chunks = [];
   for (let i = 0; i < value.length; i += limit) chunks.push(value.slice(i, i + limit));
   return chunks;
+}
+
+export function toTelegramPlainText(text) {
+  return String(text || "")
+    .replace(/<oai-mem-citation>[\s\S]*?<\/oai-mem-citation>/g, "")
+    .replace(/^::[a-z][\w-]*\{.*\}\s*$/gim, "")
+    .replace(/\[([^\]\n]+)\]\((?:<)?[^)\n>]+(?:>)?\)/g, "$1")
+    .replace(/<text>([\s\S]*?)<\/text>/gi, "$1")
+    .replace(/<\/?text>/gi, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
 }
 
 async function fetchWithTimeout(url, { timeoutMs, label, ...options } = {}) {

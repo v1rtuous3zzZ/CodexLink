@@ -38,15 +38,15 @@ test("project menu uses Codex Desktop renamed project names", async () => {
   }
 });
 
-test("project list renders serial numbers without a reply hint", () => {
+test("project list renders slash serial commands without a reply hint", () => {
   const text = formatProjectList([
     { displayName: "CodexLink" },
     { displayName: "沪苏浙溯源" }
   ]);
   assert.equal(text, [
     "项目：",
-    "1. CodexLink",
-    "2. 沪苏浙溯源"
+    "/1 CodexLink",
+    "/2 沪苏浙溯源"
   ].join("\n"));
 });
 
@@ -55,15 +55,17 @@ test("new thread success message labels the project on the second line", () => {
   assert.equal(formatCreateThreadSuccess({ displayName: "沪苏浙溯源", name: "hsz_origin" }), "新建成功，请发送内容\n项目: 沪苏浙溯源");
 });
 
-test("project menu resolves a replied serial number", () => {
+test("project menu resolves a slash-prefixed serial number", () => {
   const projects = prepareProjectMenu([
     { name: "CodexLink", cwd: "F:\\CodexLink" },
     { name: "SpeakerKeepAlive", cwd: "F:\\SpeakerKeepAlive" }
   ]);
 
+  assert.equal(resolveProjectNumber({ text: "/2", projects })?.cwd, "F:\\SpeakerKeepAlive");
   assert.equal(resolveProjectNumber({ text: "2", projects })?.cwd, "F:\\SpeakerKeepAlive");
   assert.equal(resolveProjectNumber({ text: "CodexLink", projects }), null);
-  assert.equal(resolveProjectNumber({ text: "3", projects }), null);
+  assert.equal(resolveProjectNumber({ text: "/0", projects }), null);
+  assert.equal(resolveProjectNumber({ text: "/3", projects }), null);
 });
 
 test("duplicate project names require the displayed parent-qualified name", () => {
@@ -77,6 +79,7 @@ test("duplicate project names require the displayed parent-qualified name", () =
     "api（Other）"
   ]);
   assert.equal(resolveProjectNumber({ text: "api", projects }), null);
+  assert.equal(resolveProjectNumber({ text: "/2", projects })?.cwd, "F:\\Other\\api");
   assert.equal(resolveProjectNumber({ text: "2", projects })?.cwd, "F:\\Other\\api");
 });
 
@@ -91,5 +94,5 @@ test("same project and parent names receive unique reply labels", () => {
     "api（Team） #2"
   ]);
   assert.equal(resolveProjectNumber({ text: "api（Team）", projects }), null);
-  assert.equal(resolveProjectNumber({ text: "2", projects })?.cwd, "G:\\Team\\api");
+  assert.equal(resolveProjectNumber({ text: "/2", projects })?.cwd, "G:\\Team\\api");
 });

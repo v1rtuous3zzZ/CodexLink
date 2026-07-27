@@ -67,3 +67,28 @@ test("guidance confirmation keeps the original target thread", () => {
   assert.equal(guidance.thread.id, thread.id);
   assert.equal(guidance.text, "追加说明");
 });
+
+test("switch confirmation is consumed once", () => {
+  const state = new BridgeState();
+
+  state.noteSwitchCandidate({ type: "model", label: "5.5", target: "5.5" });
+  assert.equal(state.currentSelectionMode(), "switch_confirm");
+
+  const pending = state.consumeSwitchCandidate();
+  assert.equal(pending.type, "model");
+  assert.equal(pending.target, "5.5");
+  assert.equal(state.currentSelectionMode(), null);
+  assert.equal(state.consumeSwitchCandidate(), null);
+});
+
+test("runtime detail cache is pruned to keep memory bounded", () => {
+  const state = new BridgeState();
+  for (let index = 0; index < 80; index += 1) {
+    state.noteCodexRunDetail(`detail-${index}`);
+  }
+
+  assert.equal(state.currentRunDetails.length, 5);
+  state.pruneExpired();
+  assert.equal(state.currentRunDetails.length, 2);
+  assert.equal(state.currentRunDetails[0], "detail-78");
+});

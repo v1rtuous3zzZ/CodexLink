@@ -65,7 +65,7 @@ function normalizePath(value) {
 
 export function formatProjectList(projects) {
   if (projects.length === 0) return "没有可用项目";
-  const lines = projects.map((project, index) => `${index + 1}. ${project.displayName}`);
+  const lines = projects.map((project, index) => `/${index + 1} ${project.displayName}`);
   return `项目：\n${lines.join("\n")}`;
 }
 
@@ -75,8 +75,10 @@ export function formatCreateThreadSuccess(project) {
 }
 
 export function resolveProjectNumber({ text, projects }) {
-  if (!/^\d+$/.test(String(text || "").trim())) return null;
-  return projects[Number(text) - 1] || null;
+  const match = String(text || "").trim().match(/^\/?(\d+)$/);
+  if (!match) return null;
+  const index = Number(match[1]) - 1;
+  return index >= 0 ? projects[index] || null : null;
 }
 
 export function renamedProjectName({ cwd, projectNames }) {

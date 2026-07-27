@@ -14,15 +14,15 @@ export class AuditLog {
   }
 }
 
-function sanitize(value) {
+function sanitize(value, { limit = 240 } = {}) {
   if (value == null || typeof value === "number" || typeof value === "boolean") return value;
-  if (typeof value === "string") return value.length > 240 ? `${value.slice(0, 240)}...` : value;
-  if (Array.isArray(value)) return value.map(sanitize);
+  if (typeof value === "string") return value.length > limit ? `${value.slice(0, limit)}...` : value;
+  if (Array.isArray(value)) return value.map((item) => sanitize(item, { limit }));
   if (typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value)
         .filter(([key]) => !/token|secret|credential|password/i.test(key))
-        .map(([key, item]) => [key, sanitize(item)])
+        .map(([key, item]) => [key, sanitize(item, { limit: /error|stack/i.test(key) ? 4000 : 240 })])
     );
   }
   return String(value);

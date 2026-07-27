@@ -12,6 +12,7 @@ test("config requires and persists both Telegram identity values", async () => {
     const configPath = path.join(dir, "codexlink.local.json");
     await writeFile(configPath, JSON.stringify({
       botToken: "token",
+      botUsername: "@v1rtuous_bot",
       allowedUserId: "123",
       allowedChatId: "456",
       lastUpdateId: 100,
@@ -20,9 +21,11 @@ test("config requires and persists both Telegram identity values", async () => {
 
     const config = await loadConfig(configPath);
     assert.equal(config.allowedUserId, "123");
+    assert.equal(config.botUsername, "v1rtuous_bot");
     assert.equal(config.allowedChatId, "456");
     assert.equal(config.lastUpdateId, 100);
     assert.equal(config.accountLabel, "未配置");
+    assert.equal(config.wakePort, 17321);
 
     await saveRuntimeConfig(config, {
       lastUpdateId: 101,
@@ -36,12 +39,14 @@ test("config requires and persists both Telegram identity values", async () => {
     });
     const persisted = JSON.parse(await readFile(configPath, "utf8"));
     assert.equal(persisted.allowedUserId, "123");
+    assert.equal(persisted.botUsername, "v1rtuous_bot");
     assert.equal(persisted.allowedChatId, "456");
     assert.equal(persisted.lastUpdateId, 101);
     assert.equal(persisted.accountLabel, "未配置");
     assert.equal(persisted.boundThreadId, "thread-b");
     assert.equal(persisted.boundThread.id, "thread-b");
     assert.equal(persisted.boundThread.rolloutPath, "C:\\rollout-thread-b.jsonl");
+    assert.equal(persisted.wakePort, 17321);
     assert.equal("inputMode" in persisted, false);
     assert.equal("fileAccessEnabled" in persisted, false);
   } finally {
@@ -110,6 +115,7 @@ test("config tolerates UTF-8 BOM written by Windows tools", async () => {
     })}`, "utf8");
     const config = await loadConfig(configPath);
     assert.equal(config.allowedChatId, "456");
+    assert.equal(config.botUsername, "v1rtuous_bot");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

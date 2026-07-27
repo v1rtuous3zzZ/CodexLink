@@ -9,6 +9,7 @@ CodexLink 是一个仅供个人使用的 Windows 桥接程序：手机通过 Tel
 /l：本会话历史
 /new：本项目新建会话，可直接加内容
 /b：绑定最新会话
+/bind：绑定最新会话
 /q：刷新当前额度
 /qs：刷新全部额度
 /u：切换账号
@@ -16,6 +17,10 @@ CodexLink 是一个仅供个人使用的 Windows 桥接程序：手机通过 Tel
 /off：关闭输出
 /t：运行时长
 /m：详细状态
+/model：当前模型，回复序号后需 /y 确认
+/model5.5：快捷选择模型，支持 /model5.6S、/model5.4M，需 /y 确认
+/reason：推理强度列表，序号从 /1 开始，低/中/高/极高
+/reason高：快捷选择推理强度，需 /y 确认
 /y：确认
 /n：取消
 /s：停止回答
@@ -23,16 +28,16 @@ CodexLink 是一个仅供个人使用的 Windows 桥接程序：手机通过 Tel
 
 ### `/list`
 
-显示 Codex 历史会话中识别到的项目，优先使用 Codex Desktop 中重命名后的项目名称，并以“序号 + 项目名”展示。直接回复项目序号后，显示该项目最近 3 个会话；同名项目会附带父目录名称用于区分：
+显示 Codex 历史会话中识别到的项目，优先使用 Codex Desktop 中重命名后的项目名称，并以“/序号 + 项目名”展示，项目序号从 `/1` 开始。直接回复 `/项目序号` 后，显示该项目最近 3 个会话；同名项目会附带父目录名称用于区分。项目内会话菜单使用 `/0 新建会话`，最近会话从 `/1` 开始：
 
 ```text
-0. 新建会话
-1. 最近会话一
-2. 最近会话二
-3. 最近会话三
+/0 新建会话
+/1 最近会话一
+/2 最近会话二
+/3 最近会话三
 ```
 
-回复 `1`、`2` 或 `3` 会打开并绑定对应会话；回复 `0` 会在该项目中新建并绑定会话。
+回复 `/1`、`/2` 或 `/3` 会打开并绑定对应会话；回复 `/0` 会在该项目中新建并绑定会话。菜单选择兼容裸数字和带 `/` 的数字。
 
 未知命令会返回完整指令清单。
 
@@ -48,7 +53,7 @@ CodexLink 是一个仅供个人使用的 Windows 桥接程序：手机通过 Tel
 /new帮我检查这个项目的测试失败原因
 ```
 
-### `/b`
+### `/b`、`/bind`
 
 直接绑定全部项目中最新的一条 Codex 会话。
 
@@ -65,7 +70,7 @@ CodexLink 是一个仅供个人使用的 Windows 桥接程序：手机通过 Tel
 
 ### `/u`
 
-显示 CodexSwitch 中保存的所有账号邮箱。直接回复账号序号后，CodexLink 会切换到该账号，重启 Codex Desktop，并在重启命令完成后回复 Telegram。
+显示 CodexSwitch 中保存的所有账号邮箱，账号序号从 `/1` 开始。直接回复 `/账号序号` 后，CodexLink 会切换到该账号，重启 Codex Desktop，并在重启命令完成后回复 Telegram。
 
 ### `/on`
 
@@ -128,17 +133,20 @@ npm install
 ```json
 {
   "botToken": "在此处由用户手动填写",
+  "botUsername": "v1rtuous_bot",
   "allowedUserId": "在此处由用户手动填写",
   "allowedChatId": "在此处由用户手动填写",
-  "pollIntervalMs": 1500,
   "forwardOutput": true,
   "dryRun": false,
   "accountLabel": "Plus A",
   "boundThreadId": null,
   "codexWindowProcessName": "Codex",
-  "codexCommand": "codex"
+  "codexCommand": "codex",
+  "wakePort": 17321
 }
 ```
+
+最近 15 分钟没有 Telegram 问答时，会暂停 Telegram 和 rollout 轮询；在本机 cmd 输入 `w` 后恢复轮询并回复“CodexLink 已唤醒”。
 
 配置文件包含 Bot Token，只保存在本机。运行时会在同一文件中保存当前绑定、输出开关和最后处理的 Telegram Update ID。
 

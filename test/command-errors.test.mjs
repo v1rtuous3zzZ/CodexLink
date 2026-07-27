@@ -12,7 +12,7 @@ import {
 test("all supported commands pass through unified exception handling", async () => {
   const source = await readFile(new URL("../src/index.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(source, /GUARDED_COMMANDS/);
-  for (const command of ["/list", "/l", "/new", "/b", "/q", "/qs", "/u", "/on", "/off", "/help", "/t", "/m", "/y", "/n", "/s"]) {
+  for (const command of ["/list", "/l", "/new", "/b", "/bind", "/q", "/qs", "/u", "/on", "/off", "/help", "/t", "/m", "/model", "/reason", "/y", "/n", "/s"]) {
     assert.equal(COMMANDS.has(command), true);
   }
   assert.equal(COMMANDS.has("/unknown"), false);
@@ -56,8 +56,33 @@ test("input failures return the failure reason", () => {
   );
 });
 
+test("inline new command waits long enough for desktop state writes", async () => {
+  const source = await readFile(new URL("../src/index.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /const NEW_THREAD_WAIT_ATTEMPTS = 120;/);
+  assert.match(source, /const NEW_THREAD_WAIT_DELAY_MS = 500;/);
+  assert.match(source, /本地 state 在等待超时前没有写入新任务/);
+});
+
+test("slow user actions send an immediate progress message", async () => {
+  const source = await readFile(new URL("../src/index.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /正在新建 Codex 任务并发送内容/);
+  assert.match(source, /正在新建 Codex 任务/);
+  assert.match(source, /已收到，正在发送到 Codex/);
+  assert.match(source, /sendTextToCodex\(chatId, "command:\/new", initialText, \{ progressMessage: null \}\)/);
+});
+
+test("inline new sends content before waiting for the new thread state row", async () => {
+  const source = await readFile(new URL("../src/index.mjs", import.meta.url), "utf8");
+  const pendingBranch = source.slice(source.indexOf("if (pendingNewThread) {"), source.indexOf("const rolloutBefore"));
+
+  assert.ok(pendingBranch.indexOf("sendInputToCodexWindow(text") < pendingBranch.indexOf("waitForNewProjectThread"));
+  assert.ok(pendingBranch.indexOf("sendInputToCodexWindow(text") < pendingBranch.indexOf("bindThread(chatId, thread"));
+});
+
 test("only retained commands and ordinary input restore disabled output", () => {
-  for (const command of ["/list", "/l", "/new", "/b", "/q", "/qs", "/u", "/on", "/help", "/t", "/m", "/y", "/n", "/s", "/unknown"]) {
+  for (const command of ["/list", "/l", "/new", "/b", "/bind", "/q", "/qs", "/u", "/on", "/help", "/t", "/m", "/model", "/reason", "/y", "/n", "/s", "/unknown"]) {
     assert.equal(shouldAutoEnableOutput({ command, outputEnabled: false }), true);
   }
   assert.equal(shouldAutoEnableOutput({ command: null, outputEnabled: false }), true);

@@ -72,7 +72,7 @@ export function formatAccountList(accounts, { current = "" } = {}) {
   if (accounts.length === 0) return "没有可用账号";
   const lines = accounts.map((account, index) => {
     const marker = current && account.email.toLowerCase() === current.toLowerCase() ? "（当前）" : "";
-    return `${index + 1}. ${account.email}${marker}`;
+    return `/${index + 1} ${account.email}${marker}`;
   });
   return `账号：\n${lines.join("\n")}`;
 }
@@ -88,8 +88,10 @@ export function formatQuotaResult({ email, quota, error }) {
 }
 
 export function resolveAccountNumber({ text, accounts }) {
-  if (!/^\d+$/.test(String(text || "").trim())) return null;
-  return accounts[Number(text) - 1] || null;
+  const match = String(text || "").trim().match(/^\/?(\d+)$/);
+  if (!match) return null;
+  const index = Number(match[1]) - 1;
+  return index >= 0 ? accounts[index] || null : null;
 }
 
 function detectAccountName(auth) {

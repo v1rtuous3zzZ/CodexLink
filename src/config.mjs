@@ -37,9 +37,9 @@ export async function loadConfig(configPath = defaultConfigPath()) {
   return {
     configPath,
     botToken: parsed.botToken || "",
+    botUsername: String(parsed.botUsername || "v1rtuous_bot").trim().replace(/^@/, "") || "v1rtuous_bot",
     allowedUserId: String(parsed.allowedUserId).trim(),
     allowedChatId: String(parsed.allowedChatId).trim(),
-    pollIntervalMs: Number(parsed.pollIntervalMs || 1500),
     dryRun: Boolean(parsed.dryRun),
     outputEnabled: parsed.forwardOutput === undefined ? true : Boolean(parsed.forwardOutput),
     accountLabel: String(parsed.accountLabel || "未配置").trim() || "未配置",
@@ -49,7 +49,8 @@ export async function loadConfig(configPath = defaultConfigPath()) {
     auditPath: parsed.auditPath || defaultAuditPath(),
     lockPath: parsed.lockPath || defaultLockPath(),
     codexWindowProcessName: parsed.codexWindowProcessName || "Codex",
-    codexCommand: String(parsed.codexCommand || "codex").trim() || "codex"
+    codexCommand: String(parsed.codexCommand || "codex").trim() || "codex",
+    wakePort: Number(parsed.wakePort || 17321)
   };
 }
 
@@ -58,9 +59,9 @@ export async function saveRuntimeConfig(config, patch) {
   await mkdir(path.dirname(next.configPath), { recursive: true });
   const persisted = {
     botToken: next.botToken,
+    botUsername: next.botUsername,
     allowedUserId: next.allowedUserId,
     allowedChatId: next.allowedChatId,
-    pollIntervalMs: next.pollIntervalMs,
     dryRun: next.dryRun,
     forwardOutput: next.outputEnabled !== false,
     accountLabel: next.accountLabel,
@@ -70,7 +71,8 @@ export async function saveRuntimeConfig(config, patch) {
     auditPath: next.auditPath,
     lockPath: next.lockPath || defaultLockPath(),
     codexWindowProcessName: next.codexWindowProcessName,
-    codexCommand: next.codexCommand || "codex"
+    codexCommand: next.codexCommand || "codex",
+    wakePort: Number(next.wakePort || 17321)
   };
   await writeFile(next.configPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
   return next;

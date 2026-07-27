@@ -1,3 +1,5 @@
+import { setDetailedOutputEnabled } from "./detail-output-state.mjs";
+
 export class BridgeState {
   constructor({ outputEnabled, boundThread = null } = {}) {
     this.outputEnabled = outputEnabled === undefined ? true : Boolean(outputEnabled);
@@ -7,14 +9,17 @@ export class BridgeState {
     this.lastThreadList = [];
     this.lastProjectList = [];
     this.lastAccountList = [];
+    this.lastModelList = [];
     this.selectedProject = null;
     this.selectionMode = null;
     this.selectionExpiresAt = 0;
     this.codexRunStartedAtMs = 0;
     this.guidanceCandidate = null;
+    this.pendingSwitch = null;
     this.pendingNewThread = null;
     this.currentRunDetailed = false;
     this.currentRunDetails = [];
+    setDetailedOutputEnabled(false);
   }
 
   bind(thread) {
@@ -51,6 +56,26 @@ export class BridgeState {
     this.lastThreadList = [];
     this.selectedProject = null;
     this.selectionMode = "account";
+    this.selectionExpiresAt = Date.now() + ttlMs;
+  }
+
+  noteModelList(models, { ttlMs = 5 * 60 * 1000 } = {}) {
+    this.lastModelList = Array.isArray(models) ? models.map(String) : [];
+    this.lastProjectList = [];
+    this.lastThreadList = [];
+    this.lastAccountList = [];
+    this.selectedProject = null;
+    this.selectionMode = "model";
+    this.selectionExpiresAt = Date.now() + ttlMs;
+  }
+
+  noteSwitchCandidate(candidate, { ttlMs = 5 * 60 * 1000 } = {}) {
+    this.pendingSwitch = {
+      type: String(candidate?.type || ""),
+      label: String(candidate?.label || ""),
+      target: String(candidate?.target || candidate?.label || "")
+    };
+    this.selectionMode = "switch_confirm";
     this.selectionExpiresAt = Date.now() + ttlMs;
   }
 
@@ -94,6 +119,20 @@ export class BridgeState {
     this.selectionExpiresAt = 0;
   }
 
+  consumeSwitchCandidate() {
+    const pending = this.pendingSwitch;
+    this.pendingSwitch = null;
+    this.selectionMode = null;
+    this.selectionExpiresAt = 0;
+    return pending;
+  }
+
+  cancelSwitchCandidate() {
+    this.pendingSwitch = null;
+    this.selectionMode = null;
+    this.selectionExpiresAt = 0;
+  }
+
   markCodexRunStarted(nowMs = Date.now()) {
     this.codexRunStartedAtMs = nowMs;
   }
@@ -102,16 +141,18 @@ export class BridgeState {
     this.codexRunStartedAtMs = 0;
     this.currentRunDetailed = false;
     this.currentRunDetails = [];
+    setDetailedOutputEnabled(false);
   }
 
   noteCodexRunDetail(text) {
     const value = String(text || "").trim();
     if (value) this.currentRunDetails.push(value);
-    if (this.currentRunDetails.length > 200) this.currentRunDetails.shift();
+    while (this.currentRunDetails.length > 5) this.currentRunDetails.shift();
   }
 
   enableCurrentRunDetails() {
     this.currentRunDetailed = true;
+    setDetailedOutputEnabled(true);
     return [...this.currentRunDetails];
   }
 
@@ -120,14 +161,23 @@ export class BridgeState {
     return this.selectionMode;
   }
 
+  pruneExpired(nowMs = Date.now()) {
+    this.currentSelectionMode(nowMs);
+    if (!this.currentRunDetailed && this.currentRunDetails.length > 0) {
+      this.currentRunDetails = this.currentRunDetails.slice(-2);
+    }
+  }
+
   clearSelection() {
     this.selectionMode = null;
     this.selectionExpiresAt = 0;
     this.lastProjectList = [];
     this.lastThreadList = [];
     this.lastAccountList = [];
+    this.lastModelList = [];
     this.selectedProject = null;
     this.guidanceCandidate = null;
+    this.pendingSwitch = null;
   }
 
   enableOutput() {

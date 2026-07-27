@@ -5,6 +5,7 @@ const runFile = promisify(execFile);
 
 const composerDiscoveryPowerShell = String.raw`
 $bottomBandTop = $windowBottom - [Math]::Max(240, $windowHeight * 0.35)
+$mainContentLeft = $windowLeft + [Math]::Max(260, $windowWidth * 0.25)
 $allControls = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
 $stopButton = @($allControls | Where-Object {
   $control = $_.Current
@@ -25,7 +26,8 @@ $editable = @($allControls | Where-Object {
     $control.ControlType -eq [System.Windows.Automation.ControlType]::Document) -and
     $isWritable -and $control.IsEnabled -and $control.IsKeyboardFocusable -and -not $control.IsOffscreen -and
     -not [double]::IsInfinity($editableRect.X) -and -not [double]::IsInfinity($editableRect.Y) -and
-    $editableRect.Width -gt 0 -and $editableRect.Height -gt 0 -and $editableRect.Y -ge $bottomBandTop
+    $editableRect.Width -gt 0 -and $editableRect.Height -gt 0 -and
+    $editableRect.Y -ge $bottomBandTop -and $editableRect.X -ge $mainContentLeft
 } | Sort-Object { $_.Current.BoundingRectangle.Y } -Descending | Select-Object -First 1)
 `;
 
@@ -87,7 +89,7 @@ export async function stopCodexDesktopTask({ processName = "Codex", dryRun = fal
   }
 }
 
-export async function createCodexDesktopThread({ processName = "Codex", projectName, dryRun = false } = {}) {
+export async function createCodexDesktopThread({ processName = "Codex", projectName = "", dryRun = false } = {}) {
   if (dryRun) return { ok: true, dryRun: true };
   if (process.platform !== "win32") throw new Error("Codex desktop thread creation is only supported on Windows.");
   try {
@@ -101,7 +103,7 @@ export async function createCodexDesktopThread({ processName = "Codex", projectN
   }
 }
 
-export function buildCreateCodexDesktopThreadPowerShellArgs({ processName, projectName }) {
+export function buildCreateCodexDesktopThreadPowerShellArgs({ processName, projectName = "" }) {
   const script = String.raw`
 $ProcessName = '${quotePowerShellString(processName)}'
 $ProjectName = '${quotePowerShellString(projectName)}'
@@ -123,10 +125,6 @@ public static class CodexLinkDesktopCreate {
   public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")]
   public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
-  [DllImport("user32.dll")]
-  public static extern bool SetCursorPos(int x, int y);
-  [DllImport("user32.dll")]
-  public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
 }
 "@
 $inputDesktop = [CodexLinkDesktopCreate]::OpenInputDesktop(0, $false, 0x0100)
@@ -146,39 +144,42 @@ Start-Sleep -Milliseconds 350
 $rootElement = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
 if (-not $rootElement) { throw "Windows is locked or Codex desktop is not interactive." }
 $allControls = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-$targetName = "在 $ProjectName 中新建任务"
-$button = @($allControls | Where-Object {
-  $control = $_.Current
-  $control.ControlType -eq [System.Windows.Automation.ControlType]::Button -and
-    $control.Name -eq $targetName -and
-    $control.IsEnabled
-} | Select-Object -First 1)
-if (-not $button) { throw "Codex desktop new-task button was not found for project '$ProjectName'." }
+$button = $null
+$targetNames = @()
+if ($ProjectName.Trim()) {
+  $targetNames += "在 $ProjectName 中新建任务"
+  $targetNames += "New task in $ProjectName"
+}
+$targetNames += @("新建任务", "New task", "New Task")
+foreach ($targetName in $targetNames) {
+  $button = @($allControls | Where-Object {
+    $control = $_.Current
+    $control.ControlType -eq [System.Windows.Automation.ControlType]::Button -and
+      $control.Name -eq $targetName -and
+      $control.IsEnabled
+  } | Select-Object -First 1)
+  if ($button) { break }
+}
 $scrollPattern = $null
-try {
-  if ($button.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern, [ref]$scrollPattern)) {
-    $scrollPattern.ScrollIntoView()
-    Start-Sleep -Milliseconds 250
-  }
-} catch {}
-$buttonRect = $button.Current.BoundingRectangle
-if (-not $button.Current.IsOffscreen -and $buttonRect.Width -gt 0 -and $buttonRect.Height -gt 0) {
-  $clickX = [int]($buttonRect.X + ($buttonRect.Width / 2))
-  $clickY = [int]($buttonRect.Y + ($buttonRect.Height / 2))
-  $null = [CodexLinkDesktopCreate]::SetCursorPos($clickX, $clickY)
-  Start-Sleep -Milliseconds 80
-  [CodexLinkDesktopCreate]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-  Start-Sleep -Milliseconds 40
-  [CodexLinkDesktopCreate]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-  Start-Sleep -Milliseconds 500
-  exit
+if ($button) {
+  try {
+    if ($button.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern, [ref]$scrollPattern)) {
+      $scrollPattern.ScrollIntoView()
+      Start-Sleep -Milliseconds 250
+    }
+  } catch {}
+  $buttonRect = $button.Current.BoundingRectangle
+}
+if (-not $button) { throw "Codex desktop new-task button was not found." }
+if ($button.Current.IsOffscreen -or $buttonRect.Width -le 0 -or $buttonRect.Height -le 0) {
+  throw "Codex desktop new-task button is not visible."
 }
 $invokePattern = $null
 if (-not $button.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$invokePattern)) {
   throw "Codex desktop new-task button cannot be invoked."
 }
 $invokePattern.Invoke()
-Start-Sleep -Milliseconds 500
+Start-Sleep -Milliseconds 250
 `;
   return buildPowerShellArgs(script);
 }
@@ -255,8 +256,10 @@ Start-Sleep -Milliseconds 250
 $rootElement = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
 if (-not $rootElement) { throw "Windows is locked or Codex desktop is not interactive." }
 $rootRect = $rootElement.Current.BoundingRectangle
+$windowLeft = $rootRect.Left
 $windowBottom = $rootRect.Bottom
 $windowHeight = $rootRect.Height
+$windowWidth = $rootRect.Width
 ${composerDiscoveryPowerShell}
 if (-not $stopButton) { 'idle'; exit }
 $invokePattern = $null
@@ -309,8 +312,10 @@ Start-Sleep -Milliseconds 250
 $rootElement = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
 if (-not $rootElement) { throw "Windows is locked or Codex desktop is not interactive." }
 $rootRect = $rootElement.Current.BoundingRectangle
+$windowLeft = $rootRect.Left
 $windowBottom = $rootRect.Bottom
 $windowHeight = $rootRect.Height
+$windowWidth = $rootRect.Width
 ${composerDiscoveryPowerShell}
 if ($stopButton) { 'running'; exit }
 if ($editable) { 'idle' } else { 'unknown' }
@@ -369,15 +374,11 @@ public static class Win32 {
   [DllImport("user32.dll")]
   public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll")]
-  public static extern bool SetCursorPos(int x, int y);
-  [DllImport("user32.dll")]
   public static extern IntPtr OpenInputDesktop(uint dwFlags, bool fInherit, uint dwDesiredAccess);
   [DllImport("user32.dll")]
   public static extern bool SwitchDesktop(IntPtr hDesktop);
   [DllImport("user32.dll")]
   public static extern bool CloseDesktop(IntPtr hDesktop);
-  [DllImport("user32.dll")]
-  public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
 }
 "@
 
@@ -416,15 +417,17 @@ if (-not $foregroundProcess -or $foregroundProcess.Id -ne $process.Id) {
   throw "Refusing to paste because foreground window is $actual, not $($process.ProcessName) ($($process.Id))."
 }
 
+[System.Windows.Forms.SendKeys]::SendWait("{ESC}")
+Start-Sleep -Milliseconds 250
+
 $rect = New-Object Win32+RECT
 if (-not [Win32]::GetWindowRect($process.MainWindowHandle, [ref]$rect)) {
   throw "Could not read Codex desktop window bounds."
 }
 $width = [Math]::Max(1, $rect.Right - $rect.Left)
 $height = [Math]::Max(1, $rect.Bottom - $rect.Top)
-$composerX = $rect.Left + [int]($width * 0.50)
-$composerOffsetY = [int]([Math]::Max(95, [Math]::Min(150, $height * 0.12)))
-$composerY = $rect.Bottom - $composerOffsetY
+$windowLeft = $rect.Left
+$windowWidth = $width
 
 $rootElement = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
 if (-not $rootElement) {
@@ -433,6 +436,10 @@ if (-not $rootElement) {
 $windowBottom = $rect.Bottom
 $windowHeight = $height
 ${composerDiscoveryPowerShell}
+for ($attempt = 0; -not $editable -and $attempt -lt 5; $attempt++) {
+  Start-Sleep -Milliseconds 300
+  ${composerDiscoveryPowerShell}
+}
 if ($stopButton -and -not $AllowWhileRunning) {
   throw "Codex desktop is still running (Stop button is visible). Wait until the current turn finishes, then send the Telegram message again."
 }
@@ -440,19 +447,22 @@ if ($stopButton -and -not $AllowWhileRunning) {
 if (-not $editable) {
   throw "Refusing to paste because the Codex input area could not be confirmed."
 }
-$editableRect = $editable.Current.BoundingRectangle
-$editableY = [int]($editableRect.Y + ($editableRect.Height / 2))
-$editableX = [int]($editableRect.X + ([Math]::Min(80, $editableRect.Width / 2)))
-if ($editableX -ge $rect.Left -and $editableX -le $rect.Right -and
-    $editableY -ge $bottomBandTop -and $editableY -le $rect.Bottom) {
-  $composerX = $editableX
-  $composerY = $editableY
+try {
+  $editable.SetFocus()
+  Start-Sleep -Milliseconds 150
+} catch {
+  throw "Refusing to paste because the Codex input area could not be focused."
 }
-$null = [Win32]::SetCursorPos($composerX, $composerY)
-Start-Sleep -Milliseconds 80
-[Win32]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-Start-Sleep -Milliseconds 40
-[Win32]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+$focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+if (-not $focused) {
+  throw "Refusing to paste because the Codex input area focus could not be confirmed."
+}
+$focusedControl = $focused.Current
+if (-not (($focusedControl.ControlType -eq [System.Windows.Automation.ControlType]::Edit -or
+    $focusedControl.ControlType -eq [System.Windows.Automation.ControlType]::Document) -and
+    $focusedControl.IsEnabled -and -not $focusedControl.IsOffscreen)) {
+  throw "Refusing to paste because the focused Codex input area could not be confirmed."
+}
 Start-Sleep -Milliseconds 150
 
 $previousClipboard = $null

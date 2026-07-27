@@ -14,6 +14,7 @@ export async function readRecentAssistantHistory({ rolloutPath, limit = 2 } = {}
   for await (const line of lines) {
     const event = parseRolloutLine(line);
     if (event?.kind !== "assistant") continue;
+    event.text = stripFinalPrefix(event.text);
     if (recent.at(-1)?.text === event.text) continue;
     recent.push(event);
     while (recent.length > limit) recent.shift();
@@ -24,6 +25,13 @@ export async function readRecentAssistantHistory({ rolloutPath, limit = 2 } = {}
 
 export function formatAssistantHistory(events) {
   if (!events?.length) return "本会话暂无历史记录";
-  const lines = events.map((event, index) => `${index + 1}. ${event.text}`);
+  const lines = events.map((event, index) => `/${index + 1} ${event.text}`);
   return `本会话最近 ${events.length} 条历史记录：\n\n${lines.join("\n\n")}`;
+}
+
+function stripFinalPrefix(text) {
+  return String(text || "")
+    .replace(/^Codex 运行完成\n/, "")
+    .replace(/^Codex运行结束\n/, "")
+    .replace(/^最终：/, "");
 }
