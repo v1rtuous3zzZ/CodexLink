@@ -12,26 +12,13 @@ test("tracks only minimal bound and run state", () => {
   assert.equal(state.run.turnId, "turn-1");
 });
 
-test("middle statuses are deduplicated bounded and drained", () => {
-  const state = new BridgeState();
-  state.startRun({ turnId: "turn-1", threadId: "thread-1" });
-  for (let index = 0; index < 105; index += 1) state.addStatus(`status-${index}`);
-  state.addStatus("status-104");
-  assert.equal(state.run.statuses.length, 20);
-  assert.equal(state.run.statuses[0], "status-85");
-  assert.equal(state.drainStatuses().length, 20);
-  assert.deepEqual(state.drainStatuses(), []);
-});
-
 test("finish run clears transient details", () => {
   const state = new BridgeState();
   state.startRun({ turnId: "turn", threadId: "thread" });
-  state.addStatus("checking");
   state.noteFinalText("done");
   const finished = state.finishRun();
   assert.equal(finished.finalText, "done");
   assert.equal(state.isRunning, false);
-  assert.deepEqual(state.run.statuses, []);
 });
 
 test("interaction expires as one object", () => {

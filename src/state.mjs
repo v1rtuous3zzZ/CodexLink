@@ -35,7 +35,6 @@ export class BridgeState {
       turnId: String(turnId || ""),
       threadId: String(threadId || this.boundThread?.id || ""),
       startedAtMs,
-      statuses: [],
       finalText: ""
     };
   }
@@ -43,19 +42,6 @@ export class BridgeState {
   recoverRun({ turnId, threadId, startedAtMs = Date.now() }) {
     if (!turnId) return;
     this.startRun({ turnId, threadId, startedAtMs });
-  }
-
-  addStatus(text) {
-    const value = String(text || "").trim();
-    if (!value || this.run.statuses.at(-1) === value) return;
-    this.run.statuses.push(value);
-    this.run.statuses = this.run.statuses.slice(-20);
-  }
-
-  drainStatuses() {
-    const result = [...this.run.statuses];
-    this.run.statuses = [];
-    return result;
   }
 
   noteFinalText(text) {
@@ -80,7 +66,7 @@ export class BridgeState {
 }
 
 function createEmptyRun() {
-  return { turnId: "", threadId: "", startedAtMs: 0, statuses: [], finalText: "" };
+  return { turnId: "", threadId: "", startedAtMs: 0, finalText: "" };
 }
 
 function normalizeThread(thread) {

@@ -40,5 +40,4 @@ test("menu numbers accept slash and bare forms", () => {
 
 test("help lists canonical commands and aliases", () => {
   assert.match(COMMAND_HELP, /\/bind、\/b/);
-  assert.match(COMMAND_HELP, /\/middle、\/m/);
 });

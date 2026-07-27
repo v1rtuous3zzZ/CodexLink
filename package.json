@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node src/index.mjs",
+    "start": "node --use-env-proxy src/index.mjs",
     "dry-run": "node src/index.mjs --dry-run",
     "test": "node --test"
   },

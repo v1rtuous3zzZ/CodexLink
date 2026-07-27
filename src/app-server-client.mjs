@@ -167,7 +167,7 @@ export class CodexAppServerClient extends EventEmitter {
       const text = String(chunk).trim();
       if (text) {
         this.diagnostics?.event("app-server-stderr", { text }).catch(() => {});
-        if (text.includes("unknown variant `max`") || text.includes("unknown variant `ultra`")) {
+        if (isModelsCacheCompatibilityError(text)) {
           sanitizeModelsCache(this.modelsCachePath, this.diagnostics).catch((error) => {
             this.diagnostics?.error("models-cache-sanitize", error).catch(() => {});
           });
@@ -345,6 +345,12 @@ export async function sanitizeModelsCache(modelsCachePath = defaultModelsCachePa
   await writeJsonAtomic(modelsCachePath, cache);
   await diagnostics?.event("models-cache-sanitized", { path: modelsCachePath }).catch(() => {});
   return true;
+}
+
+function isModelsCacheCompatibilityError(text) {
+  return text.includes("unknown variant `max`")
+    || text.includes("unknown variant `ultra`")
+    || text.includes("missing field `supports_reasoning_summaries`");
 }
 
 function defaultModelsCachePath() {

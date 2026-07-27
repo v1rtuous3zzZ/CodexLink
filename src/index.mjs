@@ -28,7 +28,7 @@ async function main() {
     configuredPath: config.codexExecutable,
     platform: config.dryRun ? "linux" : process.platform
   });
-  const telegram = new TelegramClient({ botToken: config.botToken, dryRun: config.dryRun });
+  const telegram = new TelegramClient({ botToken: config.botToken, dryRun: config.dryRun, diagnostics });
   const codex = new CodexAppServerClient({ executable, diagnostics, dryRun: config.dryRun });
   const accounts = new AccountStore();
   const state = new BridgeState({

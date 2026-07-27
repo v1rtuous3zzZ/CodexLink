@@ -1,9 +1,10 @@
 export class TelegramClient {
-  constructor({ botToken, dryRun = false, logger = console, requestTimeoutMs = 20_000 } = {}) {
+  constructor({ botToken, dryRun = false, logger = console, requestTimeoutMs = 20_000, diagnostics = null } = {}) {
     this.botToken = botToken;
     this.dryRun = dryRun;
     this.logger = logger;
     this.requestTimeoutMs = requestTimeoutMs;
+    this.diagnostics = diagnostics;
   }
 
   async getUpdates({ offset = 0, timeoutSeconds = 20 } = {}) {
@@ -24,21 +25,29 @@ export class TelegramClient {
 
   async sendMessage(chatId, text) {
     if (chatId == null || String(chatId).trim() === "") throw new Error("Telegram chatId 为空");
-    for (const chunk of splitTelegramText(toTelegramPlainText(text))) {
+    const chunks = splitTelegramText(toTelegramPlainText(text));
+    await this.diagnostics?.event("telegram-send", { chunks: chunks.length, length: chunks.join("").length });
+    for (const chunk of chunks) {
       if (this.dryRun) {
         this.logger.log(`[dry-run telegram -> ${chatId}] ${chunk}`);
         continue;
       }
-      const response = await fetchWithTimeout(this.apiUrl("sendMessage"), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text: chunk }),
-        timeoutMs: this.requestTimeoutMs,
-        label: "Telegram sendMessage"
-      });
-      const body = await response.json();
-      if (!body.ok) throw new Error(`Telegram sendMessage 失败：${body.description || response.status}`);
+      try {
+        const response = await fetchWithTimeout(this.apiUrl("sendMessage"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ chat_id: chatId, text: chunk }),
+          timeoutMs: this.requestTimeoutMs,
+          label: "Telegram sendMessage"
+        });
+        const body = await response.json();
+        if (!body.ok) throw new Error(`Telegram sendMessage 失败：${body.description || response.status}`);
+      } catch (error) {
+        await this.diagnostics?.error("telegram-send", error, { length: chunk.length });
+        throw error;
+      }
     }
+    await this.diagnostics?.event("telegram-send-ok", { chunks: chunks.length });
   }
 
   apiUrl(method, params = {}) {

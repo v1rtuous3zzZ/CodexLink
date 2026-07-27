@@ -58,6 +58,7 @@ function createHarness({ running = false } = {}) {
     diagnostics,
     saveConfig: async (patch) => (config = { ...config, ...patch })
   });
+  bridge.readCodexGlobalState = async () => null;
   return { bridge, state, telegram, codex, getConfig: () => config };
 }
 
@@ -80,45 +81,7 @@ test("plain text while running automatically steers", async () => {
   assert.match(telegram.messages.at(-1), /已引导当前任务/);
 });
 
-test("middle command drains statuses", async () => {
-  const { bridge, telegram, state } = createHarness({ running: true });
-  state.addStatus("正在读代码");
-  state.appendFinalText("已经生成的回复");
-  await bridge.handleTelegramUpdate(update("/m"));
-  assert.match(telegram.messages.at(-1), /正在读代码/);
-  assert.match(telegram.messages.at(-1), /已经生成的回复/);
-  assert.deepEqual(state.run.statuses, []);
-  await bridge.handleTelegramUpdate(update("/m", 11));
-  assert.match(telegram.messages.at(-1), /状态：暂无/);
-});
-
-test("middle command includes reasoning summaries and running thinking state", async () => {
-  const { bridge, telegram } = createHarness({ running: true });
-  await bridge.handleCodexNotification({
-    method: "item/started",
-    params: { threadId: "thread-1", turnId: "turn-active", item: { type: "reasoning" } }
-  });
-  await bridge.handleCodexNotification({
-    method: "item/reasoning/summaryTextDelta",
-    params: { threadId: "thread-1", turnId: "turn-active", delta: "正在检查日志" }
-  });
-  await bridge.handleCodexNotification({
-    method: "item/completed",
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-active",
-      item: { type: "reasoning", summary: [{ text: "发现 Telegram 回复延迟" }] }
-    }
-  });
-
-  await bridge.handleTelegramUpdate(update("/m"));
-
-  assert.match(telegram.messages.at(-1), /正在思考/);
-  assert.match(telegram.messages.at(-1), /正在检查日志/);
-  assert.match(telegram.messages.at(-1), /发现 Telegram 回复延迟/);
-});
-
-test("middle command recovers an active turn from the bound thread", async () => {
+test("time command recovers an active turn from the bound thread", async () => {
   const { bridge, telegram, state, codex } = createHarness();
   codex.readThreadResult = {
     id: "thread-1",
@@ -127,8 +90,9 @@ test("middle command recovers an active turn from the bound thread", async () =>
     turns: [{ id: "turn-active", status: "inProgress", createdAt: "2026-07-27T05:00:00.000Z", items: [] }]
   };
 
-  await bridge.handleTelegramUpdate(update("/m"));
+  await bridge.handleTelegramUpdate(update("/time"));
 
+  assert.equal(codex.started, 1);
   assert.equal(state.run.turnId, "turn-active");
   assert.match(telegram.messages.at(-1), /Codex 已运行/);
 });
@@ -221,4 +185,34 @@ test("unauthorized messages are ignored", async () => {
   const { bridge, telegram } = createHarness();
   await bridge.handleTelegramUpdate({ update_id: 1, message: { text: "test", from: { id: 999 }, chat: { id: 2 } } });
   assert.deepEqual(telegram.messages, []);
+});
+
+test("registered commands have safe routed behavior", async () => {
+  const cases = [
+    { input: "/help", pattern: /\/list：项目列表/ },
+    { input: "/list", pattern: /项目：/ },
+    { input: "/history", pattern: /最近 1 条回答/ },
+    { input: "/l", pattern: /最近 1 条回答/ },
+    { input: "/new", pattern: /新会话已创建并绑定/ },
+    { input: "/bind", pattern: /已绑定：Project \/ Latest/ },
+    { input: "/b", pattern: /已绑定：Project \/ Latest/ },
+    { input: "/quota", pattern: /a@example.com/ },
+    { input: "/q", pattern: /a@example.com/ },
+    { input: "/quotas", pattern: /操作失败：CodexSwitch 中没有保存账号/ },
+    { input: "/qs", pattern: /操作失败：CodexSwitch 中没有保存账号/ },
+    { input: "/account", pattern: /操作失败：CodexSwitch 中没有保存账号/ },
+    { input: "/u", pattern: /操作失败：CodexSwitch 中没有保存账号/ },
+    { input: "/on", pattern: /结果推送已开/ },
+    { input: "/off", pattern: /结果推送已关/ },
+    { input: "/time", pattern: /Codex 当前未运行/ },
+    { input: "/t", pattern: /Codex 当前未运行/ },
+    { input: "/stop", pattern: /Codex 当前未运行/ },
+    { input: "/s", pattern: /Codex 当前未运行/ }
+  ];
+
+  for (const [index, item] of cases.entries()) {
+    const { bridge, telegram } = createHarness();
+    await bridge.handleTelegramUpdate(update(item.input, 100 + index));
+    assert.match(telegram.messages.at(-1), item.pattern, item.input);
+  }
 });

@@ -13,15 +13,27 @@ export function normalizeThread(thread) {
   };
 }
 
-export function groupProjects(threads) {
+export function groupProjects(threads, { globalState = null } = {}) {
   const projects = new Map();
+  const assignments = globalState?.["thread-project-assignments"] || {};
+  const localProjects = globalState?.["local-projects"] || {};
+  const localProjectsByRoot = new Map();
+  for (const localProject of Object.values(localProjects)) {
+    for (const root of Array.isArray(localProject?.rootPaths) ? localProject.rootPaths : []) {
+      localProjectsByRoot.set(normalizeCwd(root), localProject);
+    }
+  }
+
   for (const raw of threads) {
     const thread = normalizeThread(raw);
     if (!thread.id || !thread.cwd) continue;
-    const key = normalizeCwd(thread.cwd);
+    const assignment = assignments[thread.id];
+    const localProject = assignment?.projectId ? localProjects[assignment.projectId] : localProjectsByRoot.get(normalizeCwd(thread.cwd));
+    const projectCwd = String(assignment?.cwd || localProject?.rootPaths?.[0] || thread.cwd);
+    const key = localProject?.id ? `project:${localProject.id}` : normalizeCwd(projectCwd);
     const existing = projects.get(key) || {
-      cwd: thread.cwd,
-      name: projectName(thread.cwd),
+      cwd: projectCwd,
+      name: cleanTitle(localProject?.name || projectName(projectCwd)),
       updatedAtMs: 0,
       threads: []
     };
@@ -29,6 +41,20 @@ export function groupProjects(threads) {
     existing.updatedAtMs = Math.max(existing.updatedAtMs, thread.updatedAtMs);
     projects.set(key, existing);
   }
+
+  for (const localProject of Object.values(localProjects)) {
+    const cwd = String(localProject?.rootPaths?.[0] || "");
+    if (!localProject?.id || !cwd) continue;
+    const key = `project:${localProject.id}`;
+    if (projects.has(key)) continue;
+    projects.set(key, {
+      cwd,
+      name: cleanTitle(localProject.name || projectName(cwd)),
+      updatedAtMs: toTimestampMs(localProject.updatedAt || localProject.createdAt),
+      threads: []
+    });
+  }
+
   return [...projects.values()]
     .map((project) => ({
       ...project,
@@ -72,39 +98,6 @@ export function findActiveTurn(thread) {
     return status === "inprogress" || status === "in_progress" || status === "running";
   });
   return active?.id ? { id: String(active.id), startedAtMs: toTimestampMs(active.startedAt || active.createdAt) || Date.now() } : null;
-}
-
-export function statusTextFromItem(item, phase = "completed") {
-  if (!item || typeof item !== "object") return "";
-  if (item.type === "reasoning") {
-    const summary = extractText(item.summary || item.text || item.content);
-    return summary.trim() || (phase === "started" ? "正在思考" : "");
-  }
-  if (item.type === "commandExecution") {
-    const command = Array.isArray(item.command) ? item.command.join(" ") : String(item.command || "");
-    if (!command) return phase === "started" ? "正在执行命令" : "命令执行完成";
-    return phase === "started" ? `正在执行：${truncateText(command, 180)}` : `命令${item.status === "failed" ? "失败" : "完成"}：${truncateText(command, 180)}`;
-  }
-  if (item.type === "fileChange") {
-    const paths = (item.changes || []).map((change) => change.path).filter(Boolean);
-    return paths.length ? `已处理文件：${paths.slice(0, 5).join("、")}` : "正在处理文件修改";
-  }
-  if (item.type === "plan") return String(item.text || "").trim();
-  return "";
-}
-
-export function extractText(value) {
-  if (value == null) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (Array.isArray(value)) return value.map(extractText).filter(Boolean).join("\n");
-  if (typeof value === "object") {
-    for (const key of ["text", "summary", "content", "delta", "message"]) {
-      const text = extractText(value[key]);
-      if (text) return text;
-    }
-  }
-  return "";
 }
 
 export function projectName(cwd) {

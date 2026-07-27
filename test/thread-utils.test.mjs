@@ -5,8 +5,7 @@ import {
   extractRecentAssistantAnswers,
   findActiveTurn,
   formatProjectList,
-  groupProjects,
-  statusTextFromItem
+  groupProjects
 } from "../src/thread-utils.mjs";
 
 test("groups threads into projects ordered by recent activity", () => {
@@ -18,6 +17,73 @@ test("groups threads into projects ordered by recent activity", () => {
   assert.equal(projects[0].name, "A");
   assert.deepEqual(projects[0].threads.map((item) => item.id), ["c", "a"]);
   assert.match(formatProjectList(projects), /\/1 A/);
+});
+
+test("uses Codex project assignments when available", () => {
+  const projects = groupProjects(
+    [{ id: "thread-jilin", cwd: "F:\\CodexLink", preview: "吉林调研", updatedAt: 40 }],
+    {
+      globalState: {
+        "local-projects": {
+          "project-jilin": {
+            id: "project-jilin",
+            name: "吉林高速监控",
+            rootPaths: ["E:\\jlProject"]
+          }
+        },
+        "thread-project-assignments": {
+          "thread-jilin": {
+            projectId: "project-jilin",
+            cwd: "E:\\jlProject"
+          }
+        }
+      }
+    }
+  );
+
+  assert.equal(projects[0].name, "吉林高速监控");
+  assert.equal(projects[0].cwd, "E:\\jlProject");
+  assert.match(formatProjectList(projects), /\/1 吉林高速监控/);
+});
+
+test("includes local Codex projects without returned threads", () => {
+  const projects = groupProjects([], {
+    globalState: {
+      "local-projects": {
+        "project-jilin": {
+          id: "project-jilin",
+          name: "吉林高速监控",
+          rootPaths: ["E:\\jlProject"],
+          updatedAt: 40
+        }
+      }
+    }
+  });
+
+  assert.equal(projects[0].name, "吉林高速监控");
+  assert.equal(projects[0].threads.length, 0);
+  assert.match(formatProjectList(projects), /\/1 吉林高速监控/);
+});
+
+test("merges threads into local projects by root path", () => {
+  const projects = groupProjects(
+    [{ id: "thread-codexlink", cwd: "F:\\CodexLink", preview: "Latest", updatedAt: 50 }],
+    {
+      globalState: {
+        "local-projects": {
+          "project-codexlink": {
+            id: "project-codexlink",
+            name: "CodexLink",
+            rootPaths: ["F:\\CodexLink"],
+            updatedAt: 40
+          }
+        }
+      }
+    }
+  );
+
+  assert.equal(projects.length, 1);
+  assert.equal(projects[0].threads.length, 1);
 });
 
 test("extracts only the last three agent messages", () => {
@@ -35,10 +101,4 @@ test("extracts only the last three agent messages", () => {
 test("finds an active turn", () => {
   const active = findActiveTurn({ turns: [{ id: "x", status: "completed" }, { id: "y", status: "inProgress" }] });
   assert.equal(active.id, "y");
-});
-
-test("formats safe visible status summaries", () => {
-  assert.equal(statusTextFromItem({ type: "reasoning", summary: ["检查代码", "运行测试"] }), "检查代码\n运行测试");
-  assert.match(statusTextFromItem({ type: "commandExecution", command: ["npm", "test"] }, "started"), /正在执行/);
-  assert.match(statusTextFromItem({ type: "fileChange", changes: [{ path: "src/a.js" }] }), /src\/a.js/);
 });

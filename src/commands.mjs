@@ -9,7 +9,6 @@ const DEFINITIONS = [
   { name: "/on", description: "开启最终结果推送" },
   { name: "/off", description: "关闭最终结果推送" },
   { name: "/time", aliases: ["/t"], description: "本轮运行时长" },
-  { name: "/middle", aliases: ["/m"], description: "中间状态" },
   { name: "/stop", aliases: ["/s"], description: "停止当前回答" },
   { name: "/help", description: "帮助" }
 ];

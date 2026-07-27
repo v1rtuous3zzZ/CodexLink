@@ -1,16 +1,17 @@
 import { COMMAND_HELP, isMenuNumber, menuNumber, parseCommand } from "./commands.mjs";
+import { readFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { formatElapsed, truncateText } from "./utils.mjs";
 import {
   extractRecentAssistantAnswers,
-  extractText,
   findActiveTurn,
   formatHistory,
   formatProjectList,
   formatThreadList,
   groupProjects,
   normalizeThread,
-  projectName,
-  statusTextFromItem
+  projectName
 } from "./thread-utils.mjs";
 import { formatQuotaResult, restartCodexDesktop } from "./account-store.mjs";
 
@@ -35,7 +36,6 @@ export class CodexLinkBridge {
       ["/on", (context) => this.setOutput(context.chatId, true)],
       ["/off", (context) => this.setOutput(context.chatId, false)],
       ["/time", (context) => this.showTime(context.chatId)],
-      ["/middle", (context) => this.showMiddle(context.chatId)],
       ["/stop", (context) => this.stopRun(context.chatId)],
       ["/help", (context) => this.telegram.sendMessage(context.chatId, COMMAND_HELP)]
     ]);
@@ -114,8 +114,6 @@ export class CodexLinkBridge {
     if (method === "item/started" || method === "item/completed") {
       if (!this.isCurrentRun(threadId, turnId)) return;
       const item = params.item;
-      const status = statusTextFromItem(item, method.endsWith("started") ? "started" : "completed");
-      if (status) this.state.addStatus(status);
       if (method === "item/completed" && item?.type === "agentMessage") {
         this.state.noteFinalText(item.text);
       }
@@ -124,22 +122,6 @@ export class CodexLinkBridge {
 
     if (method === "item/agentMessage/delta") {
       if (this.isCurrentRun(threadId, turnId)) this.state.appendFinalText(params.delta || "");
-      return;
-    }
-
-    if (isReasoningProgressMethod(method)) {
-      if (this.isCurrentRun(threadId, turnId)) {
-        const text = extractText(params.delta || params.text || params.summary || params.content || params.item);
-        if (text) this.state.addStatus(text);
-      }
-      return;
-    }
-
-    if (method === "error") {
-      if (this.isCurrentRun(threadId, turnId)) {
-        const text = params.error?.message || params.message || "Codex 运行出错";
-        this.state.addStatus(`错误：${text}`);
-      }
       return;
     }
 
@@ -204,9 +186,20 @@ export class CodexLinkBridge {
 
   async showProjects(chatId) {
     await this.codex.start();
-    const projects = groupProjects(await this.codex.listThreads({ limit: 200 }));
+    const projects = groupProjects(await this.codex.listThreads({ limit: 200 }), {
+      globalState: await this.readCodexGlobalState()
+    });
     this.state.setInteraction("projects", projects);
     await this.telegram.sendMessage(chatId, formatProjectList(projects));
+  }
+
+  async readCodexGlobalState() {
+    try {
+      return JSON.parse(await readFile(path.join(os.homedir(), ".codex", ".codex-global-state.json"), "utf8"));
+    } catch (error) {
+      await this.diagnostics.error("codex-global-state-read", error);
+      return null;
+    }
   }
 
   async handleSelection(chatId, number, updateId) {
@@ -324,19 +317,6 @@ export class CodexLinkBridge {
     await this.telegram.sendMessage(chatId, `Codex 已运行：${formatElapsed(this.state.run.startedAtMs)}`);
   }
 
-  async showMiddle(chatId) {
-    await this.recoverActiveRunFromBoundThread();
-    if (!this.state.isRunning) return this.telegram.sendMessage(chatId, "Codex 当前未运行");
-    const statuses = this.state.drainStatuses();
-    const header = `Codex 已运行：${formatElapsed(this.state.run.startedAtMs)}`;
-    const statusBody = statuses.length
-      ? `状态：\n${statuses.map((status, index) => `${index + 1}. ${status}`).join("\n")}`
-      : "状态：暂无";
-    const reply = String(this.state.run.finalText || "").trim();
-    const replyBody = reply ? `回复：\n${reply}` : "回复：暂无";
-    await this.telegram.sendMessage(chatId, `${header}\n\n${statusBody}\n\n${replyBody}`);
-  }
-
   async stopRun(chatId) {
     await this.recoverActiveRunFromBoundThread();
     if (!this.state.isRunning) return this.telegram.sendMessage(chatId, "Codex 当前未运行");
@@ -411,12 +391,4 @@ export class CodexLinkBridge {
     if (turnId && this.state.run.turnId && turnId !== this.state.run.turnId) return false;
     return true;
   }
-}
-
-function isReasoningProgressMethod(method) {
-  return method === "item/reasoning/summaryTextDelta"
-    || method === "item/reasoning/summaryPartAdded"
-    || method === "item/reasoning/delta"
-    || method === "item/reasoning/textDelta"
-    || method === "item/reasoning/summaryDelta";
 }
