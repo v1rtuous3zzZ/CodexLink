@@ -1,174 +1,271 @@
-# CodexLink
+# CodexLink 2.0
 
-CodexLink 是一个仅供个人使用的 Windows 桥接程序：手机通过 Telegram 控制 Codex Desktop，并接收当前绑定会话的状态和回复。
+CodexLink 是一个仅供个人使用的 Windows Telegram 远程客户端。
+
+它不再模拟鼠标、键盘、剪贴板或 Codex Desktop 输入框，而是启动独立的官方 `app-server`，通过 `thread/*` 和 `turn/*` 接口操作 Codex 账号、项目和会话。CodexLink 与 Codex Desktop 是两个独立客户端。
+
+你不需要在命令行中使用 Codex CLI。CodexLink 会自动寻找 Codex Desktop 安装产生的 `codex.exe`；找不到时可在本地配置中填写路径。
+
+## 功能范围
+
+只保留以下功能：
+
+- Telegram 普通消息发送给当前 Codex 会话
+- Codex 空闲时开始新一轮
+- Codex 运行时，普通消息自动作为本轮引导
+- 收到消息后立即回复“已收到”
+- Codex 接受任务后回复“已开始思考并执行”
+- `/list`：按项目显示会话，每个项目最近 3 条
+- 项目内 `/0` 新建会话
+- `/new`：在当前项目新建会话，可直接带任务内容
+- `/bind`、`/b`：绑定最新会话
+- `/history`、`/l`：查看当前会话最近 3 条回答
+- `/middle`、`/m`：查看本轮新的可见中间状态，发送后清空
+- `/time`、`/t`：查看本轮运行时间
+- `/stop`、`/s`：停止当前回答
+- `/account`、`/u`：使用 CodexSwitch 账号快照切换账号
+- `/quota`、`/q`：查询当前账号额度
+- `/quotas`、`/qs`：查询全部账号额度
+- `/on`、`/off`：开启或关闭最终结果自动推送
+- 默认保持唤醒轮询；如需省资源，可配置空闲休眠并通过本地唤醒命令恢复
+
+不包含模型切换、附件、语音、多用户、多 Bot、任务队列或 Web 界面。
+
+## 工作方式
+
+```text
+Telegram
+   |
+CodexLink
+   |
+Codex app-server
+   |
+Codex 项目、会话、任务和账号
+```
+
+普通消息流程：
+
+```text
+已收到，正在交给 Codex...
+Codex 已开始思考并执行
+<最终回答>
+```
+
+如果 Codex 正在运行，普通消息不会排队，也不会要求 `/y` 确认，而是直接调用 `turn/steer` 作为当前任务的引导。
+
+`/m` 返回的是 Codex 对外提供的 reasoning summary、命令执行和文件修改状态，不是模型隐藏思维链。
+
+## 环境
+
+- Windows 11 x64
+- Node.js 22 或更高版本
+- 已安装并登录 Codex Desktop
+- Telegram Bot Token
+- 已配置 CodexSwitch（账号切换和全部账号额度查询需要）
+
+项目没有 npm 运行依赖。
+
+## 配置
+
+创建：
+
+```text
+%USERPROFILE%\.codex\codexlink.local.json
+```
+
+示例：
+
+```json
+{
+  "botToken": "由用户本地填写",
+  "botUsername": "v1rtuous_bot",
+  "allowedUserId": "Telegram 用户数字 ID",
+  "allowedChatId": "Telegram 聊天数字 ID",
+  "forwardOutput": true,
+  "dryRun": false,
+  "diagnosticsMode": "debug",
+  "wakePort": 17321,
+  "idlePauseMs": 0,
+  "codexExecutable": ""
+}
+```
+
+`codexExecutable` 通常留空。自动查找顺序包括：
+
+- `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe`
+- `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe`
+- Microsoft Store Codex 的 LocalCache 本地 bin
+- `%USERPROFILE%\.codex\packages\standalone\releases\...\bin\codex.exe`
+- `where codex`
+
+若自动查找失败，将错误信息中的可执行文件路径填入 `codexExecutable`。
+
+运行时只持久化：
+
+- 当前绑定会话 ID
+- 当前项目目录
+- Telegram 最后处理的 Update ID
+- 最终结果推送开关
+
+配置通过临时文件加 rename 原子替换。
+
+## 启动
+
+```powershell
+npm test
+npm start
+```
+
+或者双击：
+
+```text
+start.bat
+```
+
+隐藏启动：
+
+```text
+start-hidden.vbs
+```
+
+只允许启动一个 CodexLink 实例，避免 Telegram `getUpdates` 冲突。
+
+## 休眠与唤醒
+
+默认配置：
+
+```json
+"idlePauseMs": 0
+```
+
+表示程序启动后保持唤醒状态，持续 Telegram 轮询。
+
+如果改成大于 0 的毫秒数，例如 `900000`，在没有 Telegram 活动并且 Codex 没有运行任务达到该时间后：
+
+- 停止 Telegram 轮询
+- 停止 Codex app-server 子进程
+- 保留本机 `127.0.0.1` 唤醒服务
+
+远程连接到电脑后执行：
+
+```text
+wake.bat
+```
+
+或：
+
+```powershell
+Invoke-WebRequest http://127.0.0.1:17321/wake -UseBasicParsing
+```
+
+Telegram 会收到：
+
+```text
+CodexLink 已唤醒
+```
+
+Windows 睡眠或关机不属于 CodexLink 的唤醒范围。
 
 ## 命令
 
 ```text
-/list：项目列表
-/l：本会话历史
-/new：本项目新建会话，可直接加内容
-/b：绑定最新会话
-/q：刷新当前额度
-/qs：刷新全部额度
-/u：切换账号
-/on：开启输出
-/off：关闭输出
-/t：运行时长
-/m：详细状态
-/y：确认
-/n：取消
-/s：停止回答
+/list
+/history 或 /l
+/new
+/new 检查当前项目
+/bind 或 /b
+/quota 或 /q
+/quotas 或 /qs
+/account 或 /u
+/on
+/off
+/time 或 /t
+/middle 或 /m
+/stop 或 /s
+/help
 ```
 
-### `/list`
+### 项目和会话
 
-显示 Codex 历史会话中识别到的项目，优先使用 Codex Desktop 中重命名后的项目名称，并以“序号 + 项目名”展示。直接回复项目序号后，显示该项目最近 3 个会话；同名项目会附带父目录名称用于区分：
+发送 `/list`：
 
 ```text
-0. 新建会话
-1. 最近会话一
-2. 最近会话二
-3. 最近会话三
+/1 CodexLink
+/2 OtherProject
 ```
 
-回复 `1`、`2` 或 `3` 会打开并绑定对应会话；回复 `0` 会在该项目中新建并绑定会话。
-
-未知命令会返回完整指令清单。
-
-### `/l`
-
-在已绑定 Codex 会话时，返回本会话最近 2 条可见回复历史。
-
-### `/new`
-
-在当前绑定会话所在项目中新建 Codex 会话，并自动绑定新会话。也可以直接附带第一条输入：
+回复 `/1`：
 
 ```text
-/new帮我检查这个项目的测试失败原因
+/0 新建会话
+/1 最近会话一
+/2 最近会话二
+/3 最近会话三
 ```
 
-### `/b`
+回复 `/0` 后会创建并绑定新 thread。下一条普通消息会直接在这个新 thread 中开始第一轮任务。
 
-直接绑定全部项目中最新的一条 Codex 会话。
+项目来源是 `thread/list` 返回的历史会话工作目录。一个从未创建过 Codex 会话的目录不会自动出现在列表中。
 
-### `/q`
+### CodexSwitch
 
-查看当前 Codex 账号额度：
-
-- 当前额度剩余比例。
-- 各额度窗口的重置时间。
-
-### `/qs`
-
-查看 CodexSwitch 中保存的所有账号额度。
-
-### `/u`
-
-显示 CodexSwitch 中保存的所有账号邮箱。直接回复账号序号后，CodexLink 会切换到该账号，重启 Codex Desktop，并在重启命令完成后回复 Telegram。
-
-### `/on`
-
-开启 Codex 输出转发。可以重复发送，回复“已开启”也可用于确认 Telegram 返回通道正常。
-
-### `/off`
-
-只关闭 Codex 输出到手机的转发：
-
-- 不停止 Telegram 轮询。
-- 不禁止手机发送命令或普通内容。
-- 关闭期间产生的 Codex 输出不会补发。
-- 手机再次发送除 `/off` 外的任何消息时，会静默恢复输出转发。
-
-### `/t`
-
-查看当前 Codex 回答已运行多久。只有桌面端正在生成并且本轮开始时间已被 CodexLink 记录时，才会返回精确时长。
-
-### `/m`
-
-开启本轮详细状态，并返回当前已记录的状态明细。运行中也可以直接附带引导内容：
+CodexLink直接复用 CodexSwitch 的本地结构：
 
 ```text
-/m继续优先检查日志里的第一个异常
+%USERPROFILE%\.codex\auth.json
+%LOCALAPPDATA%\CodexSwitch\backups\<账号>\auth.json
+%LOCALAPPDATA%\CodexSwitch\current-account.txt
 ```
 
-### `/s`
+切换账号时：
 
-停止 Codex Desktop 当前回答。
+1. 停止当前 app-server
+2. 备份当前 `auth.json`
+3. 原子替换目标账号认证文件
+4. 更新 CodexSwitch 当前账号记录
+5. 重启 Codex Desktop
+6. 清除旧账号的会话绑定
 
-## 工作方式
+切换后执行 `/list` 选择新账号下的项目。
 
-- 普通文字发送到当前绑定的 Codex Desktop 会话。
-- Codex 正在执行时，拒绝继续粘贴下一条输入。
-- 监听本地状态数据库和 rollout 文件本身不消耗 Codex 额度；只有实际提交给 Codex 的任务会消耗额度。
+## 日志
 
-## 环境要求
-
-- Windows 10 或 Windows 11。
-- Node.js 20 或更高版本。
-- Python 命令可通过 `python` 调用。
-- Codex Desktop 已安装并登录。
-- `codex` 命令可用，或在配置中填写 `codexCommand`。
-- Telegram Bot Token、个人 User ID 和私聊 Chat ID。
-
-## 安装
-
-```powershell
-git clone https://github.com/v1rtuous3zzZ/CodexLink.git
-Set-Location CodexLink
-npm install
-```
-
-项目不依赖第三方 npm 包。
-
-## 配置
-
-创建 `%USERPROFILE%\.codex\codexlink.local.json`：
+开发阶段建议：
 
 ```json
-{
-  "botToken": "在此处由用户手动填写",
-  "allowedUserId": "在此处由用户手动填写",
-  "allowedChatId": "在此处由用户手动填写",
-  "pollIntervalMs": 1500,
-  "forwardOutput": true,
-  "dryRun": false,
-  "accountLabel": "Plus A",
-  "boundThreadId": null,
-  "codexWindowProcessName": "Codex",
-  "codexCommand": "codex"
-}
+"diagnosticsMode": "debug"
 ```
 
-配置文件包含 Bot Token，只保存在本机。运行时会在同一文件中保存当前绑定、输出开关和最后处理的 Telegram Update ID。
+会记录不含 Token 的元数据日志：
 
-## 启动
+```text
+%USERPROFILE%\.codex\codexlink.diagnostics.ndjson
+```
 
-先打开 Codex Desktop，再运行：
+稳定后改为：
+
+```json
+"diagnosticsMode": "errors"
+```
+
+仅保存最近 2 条异常：
+
+```text
+%USERPROFILE%\.codex\codexlink.errors.json
+```
+
+认证内容、Bot Token 和 Authorization 请求头不会写入日志。
+
+## Desktop 显示说明
+
+CodexLink 使用自己启动的独立 app-server。Telegram 创建或继续的 thread 是否立刻、重启后或始终显示在 Codex Desktop 列表中，取决于当前 Codex Desktop 和 app-server 版本，CodexLink 不对此作保证。
+
+Desktop 是否显示不影响 CodexLink 继续绑定该 thread、发送任务、读取最近回答和接收最终结果。Telegram 侧流程正常即可。
+
+## 验证
 
 ```powershell
-.\start.bat
+npm test
 ```
 
-本地检查模式：
-
-```powershell
-npm run dry-run
-```
-
-## 日志与隐私
-
-- 默认日志：`%USERPROFILE%\.codex\codexlink.audit.ndjson`。
-- 记录事件类型、会话 ID、消息长度和错误等运行元数据。
-
-## 常见问题
-
-- 没有绑定会话：发送 `/list` 或 `/b`。
-- 找不到 Codex Desktop：确认窗口已打开且 Windows 未锁屏。
-- Codex 正在运行：等待当前任务完成后重新发送。
-- 额度不可用：确认目标账号快照仍有效。
-- Telegram 冲突：停止使用同一个 Bot Token 的其他轮询进程。
-
-## License
-
-MIT
+测试直接调用生产命令路由，覆盖普通消息、运行中引导、项目和会话选择、`/0` 新建后发送第一条任务、`/m` 清空、最终回答、额度解析、原子配置和唤醒服务。

@@ -1,57 +1,75 @@
-export const COMMAND_DEFINITIONS = [
-  ["/list", "项目列表"],
-  ["/l", "本会话历史"],
-  ["/new", "本项目新建会话，可直接加内容", { acceptsArgument: true }],
-  ["/b", "绑定最新会话"],
-  ["/q", "刷新当前额度"],
-  ["/qs", "刷新全部额度"],
-  ["/u", "切换账号"],
-  ["/on", "开启输出"],
-  ["/off", "关闭输出"],
-  ["/help", "帮助"],
-  ["/t", "运行时长"],
-  ["/m", "详细状态", { acceptsArgument: true }],
-  ["/y", "确认", { acceptsArgument: true }],
-  ["/n", "取消"],
-  ["/s", "停止回答"]
+const DEFINITIONS = [
+  { name: "/list", description: "项目列表" },
+  { name: "/history", aliases: ["/l"], description: "最近回答" },
+  { name: "/new", description: "新会话，可带内容", acceptsArgument: true },
+  { name: "/bind", aliases: ["/b"], description: "绑定最新会话" },
+  { name: "/quota", aliases: ["/q"], description: "当前账号额度" },
+  { name: "/quotas", aliases: ["/qs"], description: "全部账号额度" },
+  { name: "/account", aliases: ["/u"], description: "切换账号" },
+  { name: "/on", description: "开启最终结果推送" },
+  { name: "/off", description: "关闭最终结果推送" },
+  { name: "/time", aliases: ["/t"], description: "本轮运行时长" },
+  { name: "/middle", aliases: ["/m"], description: "中间状态" },
+  { name: "/stop", aliases: ["/s"], description: "停止当前回答" },
+  { name: "/help", description: "帮助" }
 ];
 
-export const COMMANDS = new Set(COMMAND_DEFINITIONS.map(([command]) => command));
-export const COMMAND_HELP = COMMAND_DEFINITIONS
-  .filter(([command]) => command !== "/help")
-  .map(([command, label]) => `${command}：${label}`)
-  .join("\n");
+const commandMap = new Map();
+for (const definition of DEFINITIONS) {
+  commandMap.set(definition.name, definition);
+  for (const alias of definition.aliases || []) commandMap.set(alias, definition);
+}
 
-const ARGUMENT_COMMANDS = COMMAND_DEFINITIONS
-  .filter(([, , options]) => options?.acceptsArgument)
-  .map(([command]) => command)
+const argumentCommands = [...commandMap.entries()]
+  .filter(([, definition]) => definition.acceptsArgument)
+  .map(([name]) => name)
   .sort((left, right) => right.length - left.length);
 
-export function parseCommand(text) {
-  const value = String(text || "").trim();
-  const compact = parseCompactArgumentCommand(value);
-  if (compact) return compact;
-  const match = value.match(/^(\S+)(?:\s+([\s\S]*))?$/);
-  return {
-    command: normalizeCommand(match?.[1] || ""),
-    argument: String(match?.[2] || "").trim()
-  };
-}
+export const COMMAND_HELP = DEFINITIONS
+  .filter((item) => item.name !== "/help")
+  .map((item) => `${[item.name, ...(item.aliases || [])].join("、")}：${item.description}`)
+  .join("\n");
 
-function parseCompactArgumentCommand(value) {
+export function parseCommand(text, { botUsername = "" } = {}) {
+  const value = String(text || "").trim();
+  if (!value.startsWith("/")) return null;
+
+  const tokenMatch = value.match(/^(\S+)(?:\s+([\s\S]*))?$/);
+  const rawToken = normalizeBotSuffix(tokenMatch?.[1] || "", botUsername);
+  const spacedArgument = String(tokenMatch?.[2] || "").trim();
+  const exact = commandMap.get(rawToken);
+  if (exact) return { command: exact.name, argument: spacedArgument, definition: exact };
+
   const lower = value.toLowerCase();
-  for (const command of ARGUMENT_COMMANDS) {
-    const next = value[command.length];
-    if (lower.startsWith(command) && next && next !== "@" && !/\s/.test(next)) {
-      return {
-        command,
-        argument: value.slice(command.length).trim()
-      };
+  for (const candidate of argumentCommands) {
+    const suffixCandidate = botUsername ? `${candidate}@${botUsername.toLowerCase()}` : "";
+    for (const prefix of [suffixCandidate, candidate].filter(Boolean)) {
+      if (!lower.startsWith(prefix)) continue;
+      const next = value[prefix.length] || "";
+      if (prefix === suffixCandidate && /^[A-Za-z0-9_]$/.test(next)) continue;
+      if (prefix === candidate && next === "@") continue;
+      const argument = value.slice(prefix.length).trim();
+      if (!argument) continue;
+      const definition = commandMap.get(candidate);
+      return { command: definition.name, argument, definition };
     }
   }
-  return null;
+
+  return { command: rawToken.toLowerCase(), argument: spacedArgument, definition: null };
 }
 
-function normalizeCommand(text) {
-  return String(text || "").trim().split(/\s+/)[0].split("@")[0].toLowerCase();
+export function isMenuNumber(text) {
+  return /^\/?\d+$/.test(String(text || "").trim());
+}
+
+export function menuNumber(text) {
+  return Number(String(text || "").trim().replace(/^\//, ""));
+}
+
+function normalizeBotSuffix(token, botUsername) {
+  const value = String(token || "").toLowerCase();
+  const username = String(botUsername || "").trim().replace(/^@/, "").toLowerCase();
+  if (!username) return value.split("@")[0];
+  const suffix = `@${username}`;
+  return value.endsWith(suffix) ? value.slice(0, -suffix.length) : value;
 }

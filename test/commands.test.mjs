@@ -1,42 +1,44 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { COMMAND_HELP, COMMANDS, parseCommand } from "../src/commands.mjs";
+import { COMMAND_HELP, isMenuNumber, menuNumber, parseCommand } from "../src/commands.mjs";
 
-test("command help and command set stay in sync", () => {
-  for (const command of ["/list", "/l", "/new", "/b", "/q", "/qs", "/u", "/on", "/off", "/help", "/t", "/m", "/y", "/n", "/s"]) {
-    assert.equal(COMMANDS.has(command), true);
-  }
-  assert.match(COMMAND_HELP, /\/new：本项目新建会话，可直接加内容/);
-  assert.doesNotMatch(COMMAND_HELP, /\/help：/);
+test("normalizes command aliases", () => {
+  assert.equal(parseCommand("/b").command, "/bind");
+  assert.equal(parseCommand("/l").command, "/history");
+  assert.equal(parseCommand("/q").command, "/quota");
+  assert.equal(parseCommand("/s").command, "/stop");
 });
 
-test("commands with content accept compact arguments", () => {
-  assert.deepEqual(parseCommand("/new帮我检查测试"), {
-    command: "/new",
-    argument: "帮我检查测试"
-  });
-  assert.deepEqual(parseCommand("/m继续看日志"), {
-    command: "/m",
-    argument: "继续看日志"
-  });
-  assert.deepEqual(parseCommand("/y追加引导"), {
-    command: "/y",
-    argument: "追加引导"
-  });
+test("parses compact and spaced new command content", () => {
+  assert.equal(parseCommand("/new检查测试").argument, "检查测试");
+  assert.equal(parseCommand("/new 检查测试").argument, "检查测试");
 });
 
-test("command parsing keeps spaced arguments and bot suffixes", () => {
-  assert.deepEqual(parseCommand("/new 帮我检查测试"), {
-    command: "/new",
-    argument: "帮我检查测试"
-  });
-  assert.deepEqual(parseCommand("/m@bot 继续看日志"), {
-    command: "/m",
-    argument: "继续看日志"
-  });
-  assert.deepEqual(parseCommand("/qs"), {
-    command: "/qs",
-    argument: ""
-  });
+test("removes the configured bot suffix", () => {
+  assert.equal(parseCommand("/list@my_bot", { botUsername: "my_bot" }).command, "/list");
+});
+
+test("parses compact bot suffix content only at a real suffix boundary", () => {
+  assert.equal(parseCommand("/new@my_bot检查测试", { botUsername: "my_bot" }).argument, "检查测试");
+  assert.equal(parseCommand("/new@my_bot 检查测试", { botUsername: "my_bot" }).argument, "检查测试");
+  assert.equal(parseCommand("/new@my_botfix", { botUsername: "my_bot" }).definition, null);
+});
+
+test("unknown commands stay unknown", () => {
+  const result = parseCommand("/unknown");
+  assert.equal(result.definition, null);
+  assert.equal(result.command, "/unknown");
+});
+
+test("menu numbers accept slash and bare forms", () => {
+  assert.equal(isMenuNumber("/3"), true);
+  assert.equal(isMenuNumber("3"), true);
+  assert.equal(menuNumber("/3"), 3);
+  assert.equal(menuNumber("0"), 0);
+});
+
+test("help lists canonical commands and aliases", () => {
+  assert.match(COMMAND_HELP, /\/bind、\/b/);
+  assert.match(COMMAND_HELP, /\/middle、\/m/);
 });
