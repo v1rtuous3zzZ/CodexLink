@@ -1,3 +1,5 @@
+import { setDetailedOutputEnabled } from "./detail-output-state.mjs";
+
 export class BridgeState {
   constructor({ outputEnabled, boundThread = null } = {}) {
     this.outputEnabled = outputEnabled === undefined ? true : Boolean(outputEnabled);
@@ -17,6 +19,7 @@ export class BridgeState {
     this.pendingNewThread = null;
     this.currentRunDetailed = false;
     this.currentRunDetails = [];
+    setDetailedOutputEnabled(false);
   }
 
   bind(thread) {
@@ -138,6 +141,7 @@ export class BridgeState {
     this.codexRunStartedAtMs = 0;
     this.currentRunDetailed = false;
     this.currentRunDetails = [];
+    setDetailedOutputEnabled(false);
   }
 
   noteCodexRunDetail(text) {
@@ -148,6 +152,7 @@ export class BridgeState {
 
   enableCurrentRunDetails() {
     this.currentRunDetailed = true;
+    setDetailedOutputEnabled(true);
     return [...this.currentRunDetails];
   }
 
