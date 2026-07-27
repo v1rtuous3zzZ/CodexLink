@@ -1,4 +1,5 @@
 import { open } from "node:fs/promises";
+import { isDetailedOutputEnabled } from "./detail-output-state.mjs";
 import { parseRolloutLine, shouldForwardEvent } from "./rollout-parser.mjs";
 
 export class RolloutTail {
@@ -43,7 +44,10 @@ export class RolloutTail {
 
       for (const line of lines) {
         if (!line.trim()) continue;
-        const event = parseRolloutLine(line);
+        const parsed = parseRolloutLine(line);
+        const event = parsed?.kind === "status" && isDetailedOutputEnabled()
+          ? { ...parsed, kind: "reasoning" }
+          : parsed;
         if (!shouldForwardEvent(event)) continue;
         if (this.deduper && !this.deduper.shouldSend(this.threadId, event)) continue;
         await this.onEvent(event);
