@@ -3,24 +3,22 @@ import { test } from "node:test";
 
 import { parseRolloutLine, shouldForwardEvent, createDeduper } from "../src/rollout-parser.mjs";
 
-test("extracts human-facing agent status messages", () => {
-  const line = JSON.stringify({
+test("extracts human-facing Codex summaries", () => {
+  const event = parseRolloutLine(JSON.stringify({
     timestamp: "2026-05-03T17:45:00.000Z",
     type: "event_msg",
     payload: { type: "agent_message", message: "I will verify the local files first.", phase: "working" }
-  });
-
-  const event = parseRolloutLine(line);
+  }));
 
   assert.deepEqual(event, {
     timestamp: "2026-05-03T17:45:00.000Z",
     kind: "status",
-    text: "Codex 正在运行中...\nI will verify the local files first."
+    text: "Codex 摘要\nI will verify the local files first."
   });
   assert.equal(shouldForwardEvent(event), true);
 });
 
-test("extracts visible reasoning summaries without exposing encrypted reasoning", () => {
+test("extracts visible reasoning summaries without encrypted reasoning", () => {
   const legacy = parseRolloutLine(JSON.stringify({
     timestamp: "2026-05-03T17:45:01.000Z",
     type: "event_msg",
@@ -36,62 +34,21 @@ test("extracts visible reasoning summaries without exposing encrypted reasoning"
     }
   }));
 
-  assert.equal(legacy.kind, "reasoning");
-  assert.equal(legacy.text, "Codex 推理\nI am checking the test coverage.");
+  assert.equal(legacy.kind, "summary");
+  assert.equal(legacy.text, "Codex 摘要\nI am checking the test coverage.");
   assert.equal(responseItem.text, legacy.text);
   assert.equal(responseItem.text.includes("secret"), false);
 });
 
-test("ignores encrypted reasoning when no visible summary exists", () => {
-  const line = JSON.stringify({
+test("ignores encrypted reasoning without a visible summary", () => {
+  assert.equal(parseRolloutLine(JSON.stringify({
     type: "response_item",
     payload: { type: "reasoning", encrypted_content: "secret" }
-  });
-
-  assert.equal(parseRolloutLine(line), null);
+  })), null);
 });
 
-test("extracts command execution without forwarding successful raw output", () => {
-  const begin = parseRolloutLine(JSON.stringify({
-    timestamp: "2026-05-03T17:45:03.000Z",
-    type: "event_msg",
-    payload: { type: "exec_command_begin", command: "npm test" }
-  }));
-  const end = parseRolloutLine(JSON.stringify({
-    timestamp: "2026-05-03T17:45:04.000Z",
-    type: "event_msg",
-    payload: {
-      type: "exec_command_end",
-      command: "npm test",
-      status: "completed",
-      exit_code: 0,
-      aggregated_output: "96 tests passed"
-    }
-  }));
-
-  assert.equal(begin.text, "执行命令\nnpm test");
-  assert.equal(end.text, "命令执行完成\nnpm test\n退出码：0");
-  assert.equal(end.text.includes("96 tests passed"), false);
-});
-
-test("includes a bounded error excerpt for failed commands", () => {
-  const line = JSON.stringify({
-    timestamp: "2026-05-03T17:45:04.000Z",
-    type: "event_msg",
-    payload: {
-      type: "exec_command_end",
-      command: "npm test",
-      status: "failed",
-      exit_code: 1,
-      stderr: "Assertion failed"
-    }
-  });
-
-  assert.equal(parseRolloutLine(line).text, "命令执行失败\nnpm test\n退出码：1\nAssertion failed");
-});
-
-test("extracts changed file paths from rollout patch events", () => {
-  const line = JSON.stringify({
+test("shows only filenames for successful file changes", () => {
+  const event = parseRolloutLine(JSON.stringify({
     timestamp: "2026-05-03T17:45:05.000Z",
     type: "event_msg",
     payload: {
@@ -99,63 +56,40 @@ test("extracts changed file paths from rollout patch events", () => {
       success: true,
       changes: {
         "src/rollout-parser.mjs": { type: "update" },
-        "test/rollout-parser.test.mjs": { type: "update" }
+        "F:/CodexLink/test/rollout-parser.test.mjs": { type: "update" }
       }
     }
-  });
+  }));
 
-  assert.equal(
-    parseRolloutLine(line).text,
-    "文件修改完成\n- src/rollout-parser.mjs\n- test/rollout-parser.test.mjs"
-  );
+  assert.equal(event.text, "修改文件\n- rollout-parser.mjs\n- rollout-parser.test.mjs");
 });
 
-test("extracts tool names but not tool arguments", () => {
-  const line = JSON.stringify({
-    timestamp: "2026-05-03T17:45:06.000Z",
+test("does not forward failed file changes", () => {
+  assert.equal(parseRolloutLine(JSON.stringify({
     type: "event_msg",
-    payload: {
-      type: "mcp_tool_call_begin",
-      invocation: { server: "github", tool: "fetch_file", arguments: { token: "secret" } }
-    }
-  });
-
-  const event = parseRolloutLine(line);
-  assert.equal(event.text, "调用工具\ngithub / fetch_file");
-  assert.equal(event.text.includes("secret"), false);
+    payload: { type: "patch_apply_end", success: false, status: "failed", stderr: "details" }
+  })), null);
 });
 
-test("extracts update plan steps but ignores other raw function calls", () => {
-  const plan = parseRolloutLine(JSON.stringify({
-    timestamp: "2026-05-03T17:45:07.000Z",
-    type: "response_item",
-    payload: {
-      type: "function_call",
-      name: "update_plan",
-      arguments: JSON.stringify({ plan: [{ step: "Run tests", status: "in_progress" }] })
-    }
-  }));
-  const shell = parseRolloutLine(JSON.stringify({
-    type: "response_item",
-    payload: { type: "function_call", name: "shell_command", arguments: "{\"command\":\"secret\"}" }
-  }));
+test("ignores commands, tools, plans, and their failures", () => {
+  const ignored = [
+    { type: "event_msg", payload: { type: "exec_command_begin", command: "npm test" } },
+    { type: "event_msg", payload: { type: "exec_command_end", status: "failed", stderr: "failure" } },
+    { type: "event_msg", payload: { type: "mcp_tool_call_begin", invocation: { server: "github", tool: "fetch_file" } } },
+    { type: "event_msg", payload: { type: "dynamic_tool_call_response", success: false, error: "failure" } },
+    { type: "response_item", payload: { type: "function_call", name: "update_plan", arguments: "{}" } },
+    { type: "response_item", payload: { type: "function_call_output", output: "raw output" } }
+  ];
 
-  assert.equal(plan.text, "执行计划\n- [进行中] Run tests");
-  assert.equal(shell, null);
+  for (const item of ignored) assert.equal(parseRolloutLine(JSON.stringify(item)), null);
 });
 
 test("extracts assistant visible output text", () => {
-  const line = JSON.stringify({
+  const event = parseRolloutLine(JSON.stringify({
     timestamp: "2026-05-03T17:46:00.000Z",
     type: "response_item",
-    payload: {
-      type: "message",
-      role: "assistant",
-      content: [{ type: "output_text", text: "Here is the final answer." }]
-    }
-  });
-
-  const event = parseRolloutLine(line);
+    payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Here is the final answer." }] }
+  }));
 
   assert.deepEqual(event, {
     timestamp: "2026-05-03T17:46:00.000Z",
@@ -165,120 +99,47 @@ test("extracts assistant visible output text", () => {
 });
 
 test("ignores assistant commentary response items", () => {
-  const line = JSON.stringify({
+  assert.equal(parseRolloutLine(JSON.stringify({
+    type: "response_item",
+    payload: { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "Intermediate" }] }
+  })), null);
+});
+
+test("final output strips Codex tags and keeps filenames", () => {
+  const event = parseRolloutLine(JSON.stringify({
     timestamp: "2026-05-03T17:46:00.000Z",
     type: "response_item",
     payload: {
       type: "message",
       role: "assistant",
-      phase: "commentary",
-      content: [{ type: "output_text", text: "This is an intermediate update." }]
+      content: [{ type: "output_text", text: "已改 [rollout-parser.mjs](F:/CodexLink/src/rollout-parser.mjs:1)\n::git-stage{cwd=\"F:/CodexLink\"}\n<oai-mem-citation>x</oai-mem-citation>" }]
     }
-  });
+  }));
 
-  assert.equal(parseRolloutLine(line), null);
+  assert.equal(event.text, "Codex 运行完成\n已改 rollout-parser.mjs");
 });
 
-test("final output strips codex tags", () => {
-  const line = JSON.stringify({
-    timestamp: "2026-05-03T17:46:00.000Z",
-    type: "response_item",
-    payload: {
-      type: "message",
-      role: "assistant",
-      content: [{ type: "output_text", text: "当前主进程 PID 是 `56124`。\n\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n</oai-mem-citation>" }]
-    }
-  });
-
-  assert.deepEqual(parseRolloutLine(line), {
-    timestamp: "2026-05-03T17:46:00.000Z",
-    kind: "assistant",
-    text: "Codex 运行完成\n当前主进程 PID 是 `56124`。"
-  });
-});
-
-test("final output keeps the original text and replaces edited file links with filenames", () => {
-  const line = JSON.stringify({
-    timestamp: "2026-05-03T17:46:00.000Z",
-    type: "response_item",
-    payload: {
-      type: "message",
-      role: "assistant",
-      content: [{
-        type: "output_text",
-        text: "已改 [rollout-parser.mjs](F:/CodexLink/src/rollout-parser.mjs:1) 和 [rollout-parser.test.mjs](F:/CodexLink/test/rollout-parser.test.mjs:1)\n::git-stage{cwd=\"F:/CodexLink\"}"
-      }]
-    }
-  });
-
-  assert.deepEqual(parseRolloutLine(line), {
-    timestamp: "2026-05-03T17:46:00.000Z",
-    kind: "assistant",
-    text: "Codex 运行完成\n已改 rollout-parser.mjs 和 rollout-parser.test.mjs"
-  });
-});
-
-test("final output expands text tags into plain text", () => {
-  const line = JSON.stringify({
-    timestamp: "2026-05-03T17:46:00.000Z",
-    type: "response_item",
-    payload: {
-      type: "message",
-      role: "assistant",
-      content: [{ type: "output_text", text: "这是 <text>提示</text> 内容" }]
-    }
-  });
-
-  assert.deepEqual(parseRolloutLine(line), {
-    timestamp: "2026-05-03T17:46:00.000Z",
-    kind: "assistant",
-    text: "Codex 运行完成\n这是 提示 内容"
-  });
-});
-
-test("ignores final answer agent messages because response_item carries the visible reply", () => {
-  const line = JSON.stringify({
-    timestamp: "2026-05-03T17:47:00.000Z",
+test("ignores final answer agent messages", () => {
+  assert.equal(parseRolloutLine(JSON.stringify({
     type: "event_msg",
     payload: { type: "agent_message", message: "Final answer from desktop.", phase: "final_answer" }
-  });
-
-  assert.equal(parseRolloutLine(line), null);
+  })), null);
 });
 
-test("ignores token, user, developer, raw function, and function output events", () => {
+test("ignores token, user, and developer events", () => {
   const ignored = [
     { type: "event_msg", payload: { type: "token_count" } },
-    { type: "response_item", payload: { type: "function_call", name: "shell_command" } },
-    { type: "response_item", payload: { type: "function_call_output", output: "raw output" } },
     { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] } },
     { type: "response_item", payload: { type: "message", role: "developer", content: [{ type: "input_text", text: "rules" }] } }
   ];
-
-  for (const item of ignored) {
-    assert.equal(parseRolloutLine(JSON.stringify(item)), null);
-  }
+  for (const item of ignored) assert.equal(parseRolloutLine(JSON.stringify(item)), null);
 });
 
-test("deduplicates same text for the same thread in a short window", () => {
+test("deduplicates the same visible text in a short window", () => {
   const dedupe = createDeduper({ windowMs: 5000 });
-  const event = { kind: "status", text: "Codex 正在运行中...\nSame visible message.", timestamp: "2026-05-03T17:45:00.000Z" };
-
+  const event = { kind: "summary", text: "Visible once.", timestamp: "2026-05-03T17:45:00.000Z" };
   assert.equal(dedupe.shouldSend("thread-a", event), true);
   assert.equal(dedupe.shouldSend("thread-a", event), false);
   assert.equal(dedupe.shouldSend("thread-b", event), true);
   assert.equal(dedupe.shouldSend("thread-a", { ...event, timestamp: "2026-05-03T17:45:06.000Z" }), true);
-});
-
-test("deduplicates same visible text across event forms", () => {
-  const dedupe = createDeduper({ windowMs: 5000 });
-
-  assert.equal(
-    dedupe.shouldSend("thread-a", { kind: "status", text: "Visible once.", timestamp: "2026-05-03T17:45:00.000Z" }),
-    true
-  );
-  assert.equal(
-    dedupe.shouldSend("thread-a", { kind: "assistant", text: "Visible once.", timestamp: "2026-05-03T17:45:01.000Z" }),
-    false
-  );
 });
