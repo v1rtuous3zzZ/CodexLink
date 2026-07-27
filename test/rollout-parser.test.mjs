@@ -20,6 +20,130 @@ test("extracts human-facing agent status messages", () => {
   assert.equal(shouldForwardEvent(event), true);
 });
 
+test("extracts visible reasoning summaries without exposing encrypted reasoning", () => {
+  const legacy = parseRolloutLine(JSON.stringify({
+    timestamp: "2026-05-03T17:45:01.000Z",
+    type: "event_msg",
+    payload: { type: "agent_reasoning", text: "I am checking the test coverage." }
+  }));
+  const responseItem = parseRolloutLine(JSON.stringify({
+    timestamp: "2026-05-03T17:45:02.000Z",
+    type: "response_item",
+    payload: {
+      type: "reasoning",
+      summary: [{ type: "summary_text", text: "I am checking the test coverage." }],
+      encrypted_content: "secret"
+    }
+  }));
+
+  assert.equal(legacy.kind, "reasoning");
+  assert.equal(legacy.text, "Codex 推理\nI am checking the test coverage.");
+  assert.equal(responseItem.text, legacy.text);
+  assert.equal(responseItem.text.includes("secret"), false);
+});
+
+test("ignores encrypted reasoning when no visible summary exists", () => {
+  const line = JSON.stringify({
+    type: "response_item",
+    payload: { type: "reasoning", encrypted_content: "secret" }
+  });
+
+  assert.equal(parseRolloutLine(line), null);
+});
+
+test("extracts command execution without forwarding successful raw output", () => {
+  const begin = parseRolloutLine(JSON.stringify({
+    timestamp: "2026-05-03T17:45:03.000Z",
+    type: "event_msg",
+    payload: { type: "exec_command_begin", command: "npm test" }
+  }));
+  const end = parseRolloutLine(JSON.stringify({
+    timestamp: "2026-05-03T17:45:04.000Z",
+    type: "event_msg",
+    payload: {
+      type: "exec_command_end",
+      command: "npm test",
+      status: "completed",
+      exit_code: 0,
+      aggregated_output: "96 tests passed"
+    }
+  }));
+
+  assert.equal(begin.text, "执行命令\nnpm test");
+  assert.equal(end.text, "命令执行完成\nnpm test\n退出码：0");
+  assert.equal(end.text.includes("96 tests passed"), false);
+});
+
+test("includes a bounded error excerpt for failed commands", () => {
+  const line = JSON.stringify({
+    timestamp: "2026-05-03T17:45:04.000Z",
+    type: "event_msg",
+    payload: {
+      type: "exec_command_end",
+      command: "npm test",
+      status: "failed",
+      exit_code: 1,
+      stderr: "Assertion failed"
+    }
+  });
+
+  assert.equal(parseRolloutLine(line).text, "命令执行失败\nnpm test\n退出码：1\nAssertion failed");
+});
+
+test("extracts changed file paths from rollout patch events", () => {
+  const line = JSON.stringify({
+    timestamp: "2026-05-03T17:45:05.000Z",
+    type: "event_msg",
+    payload: {
+      type: "patch_apply_end",
+      success: true,
+      changes: {
+        "src/rollout-parser.mjs": { type: "update" },
+        "test/rollout-parser.test.mjs": { type: "update" }
+      }
+    }
+  });
+
+  assert.equal(
+    parseRolloutLine(line).text,
+    "文件修改完成\n- src/rollout-parser.mjs\n- test/rollout-parser.test.mjs"
+  );
+});
+
+test("extracts tool names but not tool arguments", () => {
+  const line = JSON.stringify({
+    timestamp: "2026-05-03T17:45:06.000Z",
+    type: "event_msg",
+    payload: {
+      type: "mcp_tool_call_begin",
+      invocation: { server: "github", tool: "fetch_file", arguments: { token: "secret" } }
+    }
+  });
+
+  const event = parseRolloutLine(line);
+  assert.equal(event.text, "调用工具\ngithub / fetch_file");
+  assert.equal(event.text.includes("secret"), false);
+});
+
+test("extracts update plan steps but ignores other raw function calls", () => {
+  const plan = parseRolloutLine(JSON.stringify({
+    timestamp: "2026-05-03T17:45:07.000Z",
+    type: "response_item",
+    payload: {
+      type: "function_call",
+      name: "update_plan",
+      arguments: JSON.stringify({ plan: [{ step: "Run tests", status: "in_progress" }] })
+    }
+  }));
+  const shell = parseRolloutLine(JSON.stringify({
+    type: "response_item",
+    payload: { type: "function_call", name: "shell_command", arguments: "{\"command\":\"secret\"}" }
+  }));
+
+  assert.equal(plan.text, "执行计划\n- [进行中] Run tests");
+  assert.equal(shell, null);
+});
+
 test("extracts assistant visible output text", () => {
   const line = JSON.stringify({
     timestamp: "2026-05-03T17:46:00.000Z",
@@ -122,11 +246,9 @@ test("ignores final answer agent messages because response_item carries the visi
   assert.equal(parseRolloutLine(line), null);
 });
 
-test("ignores worklog, reasoning, token, user, and tool events", () => {
+test("ignores token, user, developer, raw function, and function output events", () => {
   const ignored = [
     { type: "event_msg", payload: { type: "token_count" } },
-    { type: "event_msg", payload: { type: "exec_command_end", message: "npm test" } },
-    { type: "response_item", payload: { type: "reasoning", encrypted_content: "secret" } },
     { type: "response_item", payload: { type: "function_call", name: "shell_command" } },
     { type: "response_item", payload: { type: "function_call_output", output: "raw output" } },
     { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] } },
